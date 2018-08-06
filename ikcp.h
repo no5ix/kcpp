@@ -156,6 +156,38 @@ typedef struct IQUEUEHEAD iqueue_head;
 #define ICONTAINEROF(ptr, type, member) ( \
 		(type*)( ((char*)((type*)ptr)) - IOFFSETOF(type, member)) )
 
+
+// 关于 IQUEUE_ENTRY 宏 : 
+//
+// #1. 先看&((type *)0)->member：
+//			把“0”强制转化为指针类型，则该指针一定指向“0”（数据段基址）。
+//			因为指针是“type *”型的，所以可取到以“0”为基地址的一个type型变量member域的地址。
+//			那么这个地址也就等于member域到结构体基地址的偏移字节数。
+// 
+// #2. 再来看((type *)((char *)(ptr)-(unsigned long)(&((type *)0)->member)))：
+//			(char *)(ptr)使得指针的加减操作步长为一字节，
+//			(unsigned long)(&((type *)0)->member)等于ptr指向的member到该member所在结构体基地址的偏移字节数。
+//			二者一减便得出该结构体的地址。转换为(type *)型的指针，大功告成。
+//
+// 比如 ikcp_parse_una 函数中的以下代码
+// ```
+// struct IQUEUEHEAD *p, *next;
+// for (p = kcp->snd_buf.next; p != &kcp->snd_buf; p = next)
+// {
+//		IKCPSEG *seg = iqueue_entry(p, IKCPSEG, node); 
+// ```
+// 其中的 ` IKCPSEG *seg = iqueue_entry(p, IKCPSEG, node); ` 展开则为 : 
+//		IKCPSEG *seg = ( (IKCPSEG*)( ( (char*)((IKCPSEG*)p) ) - ((size_t) &((IKCPSEG *)0)->node) ) );
+// 
+// 则可达到以下效果 : 
+//		通过一个 IQUEUEHEAD 指针 p 得到 一个 指向该链表节点所在的数据块的 IKCPSEG 指针 seg
+//
+// 注 : 
+//			要把源代码中的宏展开，其实只要使用gcc进行预处理即可。
+//			gcc -E source.c > out.txt
+//			-E 表示只进行预处理，不进行编译。
+//			预处理时会把注释当成空格处理掉，如果想保留其中的注释，可以加上 -C选项，即：
+//			gcc -E -C source.c > out.txt
 #define IQUEUE_ENTRY(ptr, type, member) ICONTAINEROF(ptr, type, member)
 
 
@@ -252,148 +284,140 @@ typedef struct IQUEUEHEAD iqueue_head;
 
 //=====================================================================
 //  SEGMENT
-//	KCP���ݰ�
+//	KCP数据包
 //	
-// # 1 KCP Segment����
+// # 1. KCP Segment定义
 //
-//		- KCP.Segment.conv ���Ͷ�����ն�ͨ��ʱ��ƥ�����֣����Ͷ˷��͵����ݰ��д�ֵ����ն˵�convֵƥ��һ��ʱ�����ն˲Ż���ܴ˰���
-//		- KCP.Segment.cmd cmd��command����д, ָ��Segment���͡� Segment���������¼��֣�
-//			- IKCP_CMD_PUSH : ���ݰ�
-//			- IKCP_CMD_ACK : ACK��������Զ���Լ��յ����ĸ����ݰ�
-//			- IKCP_CMD_WASK : ѯ��Զ�˴��ڴ�С
-//			- IKCP_CMD_WINS : ����Զ���Լ��Ĵ��ڴ�С
-//		- KCP.Segment.frg frg��fragment����С����һ��Segment��һ��Send��data�еĵ�����š� ����KCP��������ʱ��KCP�����snd_queue��Segment������ţ����Segment����η��������еĵ����ڼ���Segment�� �����ڷ��ͳ�ȥʱ������mss�����ƣ����ݿ��ܱ��ֳ����ɸ�Segment���ͳ�ȥ���ڷ�segment�Ĺ����У���Ӧ����žͻᱻ��¼��frg�С� ���ն��ڽ��յ���Щsegmentʱ���ͻ����frg�����ɸ�segment�ϲ���һ�����ٷ��ظ�Ӧ�ò㡣
-//		- KCP.Segment.wnd wnd��window����д�� �������ڴ�С���������أ�Flow Control��
-//			- ��Segment��Ϊ��������ʱ����wndΪ�����������ڴ�С�����ڸ���Զ���Լ�����ʣ�����
-//			- ��Segment��Ϊ���յ�����ʱ����wndΪԶ�˻������ڴ�С������֪����Զ�˴���ʣ����ٺ󣬿��Կ����Լ��������������ݵĴ�С
-//		- KCP.Segment.ts ��timestamp, ��ǰSegment����ʱ��ʱ���
-//		- KCP.Segment.resendts ��resend timestamp, ָ���ط���ʱ���������ǰʱ�䳬�����ʱ��ʱ�������ط�һ���������
-//		- KCP.Segment.sn ��Sequence Number, Segment�ı��
-//		- KCP.Segment.una una��unacknowledged, ��ʾ�˱��ǰ�����а������յ��ˡ�
-//		- KCP.Segment.fastack ���������������Ŀ����ش����ƣ�
-//		- KCP.Segment.rto rto��Retransmission TimeOut������ʱ�ش�ʱ�䣬�ڷ��ͳ�ȥʱ����֮ǰ�����������������
-//		- KCP.Segment.xmit ����������Segment���͵Ĵ�����ÿ����һ�λ��Լ�һ������ͳ�Ƹ�Segment���ش��˼��Σ����ڲο������е���
-//		- KCP.Segment.length ���ݵĳ���
-//		- KCP.Segment.data ���ݶΣ�Ӧ�ò�Ҫ���ͳ�ȥ�����ݡ�
+//		- KCP.Segment.conv 发送端与接收端通信时的匹配数字，发送端发送的数据包中此值与接收端的conv值匹配一致时，接收端才会接受此包。
+//		- KCP.Segment.cmd cmd是command的缩写, 指明Segment类型。 
+//				KCP中会有四种Segment数据包类型，分别是
+//				- 1. 数据包（IKCP_CMD_PUSH）： 
+//						最基础的Segment，用于发送应用层数据给远端。
+//						每个数据包会有自己的sn， 发送出去后不会立即从缓存池中删除，
+//						而是会等收到远端返回回来的ack包时才会从缓存中移除（两端通过sn确认哪些包已收到）
+//				- 2. ACK包（IKCP_CMD_ACK）：
+//						告诉远端自己已收到了远端发送的哪个编号的数据
+//				- 3. 窗口大小探测包（IKCP_CMD_WASK）：
+//						询问远端的接收窗口大小。
+//						本地发送数据时，会根据远端的窗口大小来控制发送的数据量。
+//						每个数据包的包头中都会带有远端当前的接收窗口大小。
+//						但是当远端的接收窗口大小为0时，本机将不会再向远端发送数据，
+//						此时也就不会有远端的回传数据从而导致无法更新远端窗口大小。
+//						因此需要单独的一类远端窗口大小探测包，在远端接收窗口大小为0时，
+//						隔一段时间询问一次，从而让本地有机会再开始重新传数据。
+//				- 4. 窗口大小回应包（IKCP_CMD_WINS）：
+//						回应远端自己的数据接收窗口大小window size
+//		- KCP.Segment.frg frg是fragment的缩小，是一个Segment在一次Send的data中的倒序序号。 
+//				在让KCP发送数据时，KCP会加入snd_queue的Segment分配序号，标记Segment是这次发送数据中的倒数第几个Segment。
+//				数据在发送出去时，由于mss的限制，数据可能被分成若干个Segment发送出去。在分segment的过程中，相应的序号就会被记录到frg中。
+//				接收端在接收到这些segment时，就会根据frg将若干个segment合并成一个，再返回给应用层。
+//		- KCP.Segment.wnd wnd是window的缩写； 滑动窗口大小，用于流控（Flow Control）
+//			- 当Segment做为发送数据时，此wnd为本机滑动窗口大小，用于告诉远端自己窗口剩余多少
+//			- 当Segment做为接收到数据时，此wnd为远端滑动窗口大小，本机知道了远端窗口剩余多少后，可以控制自己接下来发送数据的大小
+//		- KCP.Segment.ts 即timestamp, 当前Segment发送时的时间戳
+//		- KCP.Segment.resendts 即resend timestamp, 指定重发的时间戳，当当前时间超过这个时间时，则再重发一次这个包。
+//		- KCP.Segment.sn 即Sequence Number, Segment的编号
+//		- KCP.Segment.una una即unacknowledged, 表示此编号前的所有包都已收到了。
+//		- KCP.Segment.fastack 用于以数据驱动的快速重传机制；
+//		- KCP.Segment.rto rto即Retransmission TimeOut，即超时重传时间，在发送出去时根据之前的网络情况进行设置
+//		- KCP.Segment.xmit 基本类似于Segment发送的次数，每发送一次会自加一。用于统计该Segment被重传了几次，用于参考，进行调节
+//		- KCP.Segment.length 数据的长度
+//		- KCP.Segment.data 数据段，应用层要发送出去的数据。
 //
-//	# 2 KCP Segment����
 //
-//		KCP�л����������ݰ����ͣ��ֱ���
-//		- ���ݰ���IKCP_CMD_PUSH�����������ݸ�Զ��
-//		- ACK����IKCP_CMD_ACK��������Զ���Լ��յ����ĸ���ŵ�����
-//		- ���ڴ�С̽�����IKCP_CMD_WASK����ѯ��Զ�˵����ݽ��մ��ڻ�ʣ�����
-//		- ���ڴ�С��Ӧ����IKCP_CMD_WINS������ӦԶ���Լ������ݽ��մ��ڴ�С
-//
-//	## 2.1 ���ݰ�
-//
-//		�������Segment�����ڷ���Ӧ�ò����ݸ�Զ�ˡ� ÿ�����ݰ������Լ���sn�� ���ͳ�ȥ�󲻻������ӻ������ɾ�������ǻ���յ�Զ�˷��ػ�����ack��ʱ�Ż�ӻ������Ƴ�������ͨ��snȷ����Щ�����յ���
-//
-//	## 2.2 ACK��
-//
-//		����Զ���Լ����յ���Զ�˷��͵�ĳ�����ݰ���
-//
-//	## 2.3 ���ڴ�С̽���
-//
-//		ѯ��Զ�˵Ľ��մ��ڴ�С�� ���ط�������ʱ�������Զ�˵Ĵ��ڴ�С�����Ʒ��͵��������� ÿ�����ݰ��İ�ͷ�ж������Զ�˵�ǰ�Ľ��մ��ڴ�С�� ���ǵ�Զ�˵Ľ��մ��ڴ�СΪ0ʱ����������������Զ�˷������ݣ���ʱҲ�Ͳ�����Զ�˵Ļش����ݴӶ������޷�����Զ�˴��ڴ�С�� �����Ҫ������һ��Զ�˴��ڴ�С̽�������Զ�˽��մ��ڴ�СΪ0ʱ����һ��ʱ��ѯ��һ�Σ��Ӷ��ñ����л����ٿ�ʼ���´����ݡ�
-//
-//	## 2.4 ���ڴ�С��Ӧ��
-//
-//		��ӦԶ���Լ������ݽ��մ��ڴ�С��
-//
-//	# 3 kcp���ṹ����
+//	# 2. kcp包头结构分析
 //	
-//	kcp���͵����ݰ�������Լ��İ��ṹ����ͷһ��24bytes��������һЩ��Ҫ����Ϣ���������ݺʹ�С���£�
+//	kcp发送的数据包设计了自己的包结构，包头一共24bytes，包含了一些必要的信息，具体内容和大小如下：
 //	
 //	|<------------ 4 bytes ------------>|
 //	+--------+--------+--------+--------+
-//	|  conv                             | conv��Conversation, �Ự��ţ����ڱ�ʶ�շ����ݰ��Ƿ�һ��
-//	+--------+--------+--------+--------+ cmd: Command, ָ�����ͣ��������Segment������
-//	|  cmd   |  frg   |  wnd            | frg: Fragment, �ֶ���ţ��ֶδӴ�С��0�������ݰ��������
-//	+--------+--------+--------+--------+ wnd: Window, ���ڴ�С
-//	|  ts                               | ts: Timestamp, ���͵�ʱ���
+//	|  conv                             | conv：Conversation, 会话序号，用于标识收发数据包是否一致
+//	+--------+--------+--------+--------+ cmd: Command, 指令类型，代表这个Segment的类型
+//	|  cmd   |  frg   |			  wnd       | frg: Fragment, 分段序号，分段从大到小，0代表数据包接收完毕
+//	+--------+--------+--------+--------+ wnd: Window, 窗口大小
+//	|								 ts									| ts: Timestamp, 发送的时间戳
 //	+--------+--------+--------+--------+
-//	|  sn                               | sn: Sequence Number, Segment���
+//	|								 sn									| sn: Sequence Number, Segment序号
 //	+--------+--------+--------+--------+
-//	|  una                              | una: Unacknowledged, ��ǰδ�յ�����ţ�
-//	+--------+--------+--------+--------+      ������������֮ǰ�İ����յ�
-//	|  len                              | len: Length, �������ݵĳ���
+//	|							   una								| una: Unacknowledged, 当前未收到的序号，
+//	+--------+--------+--------+--------+      即代表这个序号之前的包均收到
+//	|								 len                | len: Length, 后续数据的长度
 //	+--------+--------+--------+--------+
 //
-//	���Ľṹ�����ں���ikcp_encode_seg�����ı�������п�����
+//	包的结构可以在函数ikcp_encode_seg函数的编码过程中看出来
 //=====================================================================
 struct IKCPSEG
 {
-	struct IQUEUEHEAD node; // ͨ������ʵ�ֵĶ���.
-	// node��һ��ͨ�����������ڹ���Segment���У�
-	// ͨ����������֧���ڲ�ͬ���͵���������ת�ƣ�
-	// ͨ������ʵ���Ϲ����ľ���һ����С�������ڵ㣬
-	// ����������ڵ����ڵ����ݿ����ͨ�������ڸ����ݿ��е�λ�÷������������
-	IUINT32 conv;           // Conversation, �Ự���: ���յ������ݰ��뷢�͵�һ�²Ž��մ����ݰ�
-	IUINT32 cmd;            // Command, ָ������: �������Segment������
-	IUINT32 frg;            // Fragment, �ֶ����
-	IUINT32 wnd;            // Window, ���ڴ�С
-	IUINT32 ts;             // Timestamp, ���͵�ʱ���
-	IUINT32 sn;             // Sequence Number, Segment���
-	IUINT32 una;            // Unacknowledged, ��ǰδ�յ������: ������������֮ǰ�İ����յ�
-	IUINT32 len;            // Length, ���ݳ���
-	// ֮���4�����ݶ����ڼ�¼��Segment�����ϵ�һЩ��Ϣ��
-	// resendts���ط���ʱ�����rto���ڼ�¼��ʱ�ش���ʱ������
-	// fastack��¼ack�����Ĵ��������ڿ����ش���xmit��¼���͵Ĵ�����
-	IUINT32 resendts;
-	IUINT32 rto;
-	IUINT32 fastack;
-	IUINT32 xmit;
-	char data[1];
+	struct IQUEUEHEAD node; // 节点用来串接多个 KCP segment，也就是前向后向指针；
+	// 通用链表实现的队列.
+	// node是一个通用链表，用于管理Segment队列，
+	// 通用链表可以支持在不同类型的链表中做转移，
+	// 通用链表实际上管理的就是一个最小的链表节点，
+	// 具体该链表节点所在的数据块可以通过该数据块在链表中的位置反向解析出来。见 iqueue_entry 宏
+
+	IUINT32 conv;     // Conversation, 会话序号: 接收到的数据包与发送的一致才接收此数据包
+	IUINT32 cmd;      // Command, 指令类型: 代表这个Segment的类型
+	IUINT32 frg;      // Fragment 记录了分片时的倒序序号, 当输出数据大于 MSS 时，需要将数据进行分片；
+	IUINT32 wnd;      // Window, 填写己方的可用窗口大小，
+	IUINT32 ts;       // Timestamp, 记录了发送时的时间戳，用来估计 RTT
+	IUINT32 sn;       // Sequence Number, Segment序号
+	IUINT32 una;      // Unacknowledged, 当前未收到的序号: 即代表这个序号之前的包均收到
+	IUINT32 len;      // Length, 数据长度
+	IUINT32 resendts;	// 即 resend timestamp, 指定重发的时间戳，当当前时间超过这个时间时，则再重发一次这个包。
+	IUINT32 rto;			// 即 Retransmit Timeout, 用于记录超时重传的时间间隔
+	IUINT32 fastack;	// 记录ack跳过的次数，用于快速重传, 由函数 ikcp_parse_fastack 更新
+	IUINT32 xmit;			// 记录发送的次数
+	char data[1];			// 应用层要发送出去的数据
 };
 
 
 //---------------------------------------------------------------------
 // IKCPCB
 //
-//	conv �ỰID
-//	mtu	����䵥Ԫ
-//	mss	����Ƭ��С
-//	state ����״̬��0xFFFFFFFF��ʾ�Ͽ����ӣ�
-//	snd_una ��һ��δȷ�ϵİ�
-//	snd_nxt ��һ��������İ������
-//	rcv_nxt ��������Ϣ���
-//	ssthresh ӵ��������ֵ
-//	rx_rttvar	ack����rtt����ֵ
-//	rx_srtt ack����rtt��ֵ̬
-//	rx_rto ��ack�����ӳټ���������ش���ʱʱ��
-//	rx_minrto ��С�ش���ʱʱ��
-//	snd_wnd	���ʹ��ڴ�С
-//	rcv_wnd	���մ��ڴ�С
-//	rmt_wnd, Զ�˽��մ��ڴ�С
-//	cwnd, ӵ�����ڴ�С
-//	probe ̽�������IKCP_ASK_TELL��ʾ��֪Զ�˴��ڴ�С��IKCP_ASK_SEND��ʾ����Զ�˸�֪���ڴ�С
-//	interval	�ڲ�flushˢ�¼��
-//	ts_flush �´�flushˢ��ʱ���
-//	nodelay	�Ƿ��������ӳ�ģʽ
-//	updated �Ƿ���ù�update�����ı�ʶ
-//	ts_probe, �´�̽�鴰�ڵ�ʱ���
-//	probe_wait ̽�鴰����Ҫ�ȴ���ʱ��
-//	dead_link	����ش�����
-//	incr �ɷ��͵����������
+//	conv 会话ID
+//	mtu	最大传输单元
+//	mss	最大分片大小
+//	state 连接状态（0xFFFFFFFF表示断开连接）
+//	snd_una 第一个未确认的包
+//	snd_nxt 下一个待分配的包的序号
+//	rcv_nxt 待接收消息序号
+//	ssthresh 拥塞窗口阈值
+//	rx_rttval	ack接收rtt浮动值
+//	rx_srtt ack接收rtt静态值
+//	rx_rto 由ack接收延迟计算出来的重传超时时间
+//	rx_minrto 最小重传超时时间
+//	snd_wnd	发送窗口大小
+//	rcv_wnd	接收窗口大小
+//	rmt_wnd, 远端接收窗口大小
+//	cwnd, 拥塞窗口大小
+//	probe 探查变量，IKCP_ASK_TELL表示告知远端窗口大小。IKCP_ASK_SEND表示请求远端告知窗口大小
+//	interval	内部flush刷新间隔
+//	ts_flush 下次flush刷新时间戳
+//	nodelay	是否启动无延迟模式
+//	updated 是否调用过update函数的标识
+//	ts_probe 下次探查窗口的时间戳
+//	probe_wait 探查窗口需要等待的时间
+//	dead_link	最大重传次数
+//	incr 可发送的最大数据量
 //	
-//	fastresend ���������ش����ظ�ack����
-//	nocwnd	ȡ��ӵ������
-//	stream �Ƿ����������ģʽ
+//	fastresend 触发快速重传的重复ack个数
+//	nocwnd	取消拥塞控制
+//	stream 是否采用流传输模式
 //	
-//	snd_queue	������Ϣ�Ķ���
-//	rcv_queue	������Ϣ�Ķ���
-//	snd_buf ������Ϣ�Ļ���
-//	rcv_buf ������Ϣ�Ļ���
+//	snd_queue	发送消息的队列
+//	rcv_queue	接收消息的队列
+//	snd_buf 发送消息的缓存
+//	rcv_buf 接收消息的缓存
 //	
-//	acklist �����͵�ack�б�
+//	acklist 待发送的ack列表
 //	
-//	buffer �洢��Ϣ�ֽ������ڴ�
-//	output udp������Ϣ�Ļص�����
+//	buffer 存储消息字节流的内存
+//	output udp发送消息的回调函数
 //
-//  IKCPCB���ڹ�������kcp�Ĺ������̣�
-//  �ڲ�ά����4�����зֱ����ڹ����շ������ݣ�
-//  �Լ�һ��ack�����¼ack�����ݰ���
-//	�ڲ�����һЩ�����ش�RTO�����ء����ڴ�С����Ϣ��
+//  IKCPCB用于管理整个kcp的工作过程，
+//  内部维护了4条队列分别用于管理收发的数据，
+//  以及一个ack数组记录ack的数据包。
+//	内部还有一些关于重传RTO、流控、窗口大小的信息，
 //---------------------------------------------------------------------
 struct IKCPCB
 {
@@ -403,24 +427,24 @@ struct IKCPCB
 	IINT32 rx_rttval, rx_srtt, rx_rto, rx_minrto;
 	IUINT32 snd_wnd, rcv_wnd, rmt_wnd, cwnd, probe;
 	IUINT32 current, interval, ts_flush, xmit;
-	IUINT32 nrcv_buf, nsnd_buf; // �շ��������е�Segment����
-	IUINT32 nrcv_que, nsnd_que; // �շ������е�Segment����
-	IUINT32 nodelay, updated; // ���ӳ�ack���Ƿ�update(kcp��Ҫ�ϲ�ͨ�����ϵ�ikcp_update��ikcp_check������kcp���շ�����)
+	IUINT32 nrcv_buf, nsnd_buf; // 收发缓存区中的Segment数量
+	IUINT32 nrcv_que, nsnd_que; // 收发队列中的Segment数量
+	IUINT32 nodelay, updated; // 非延迟ack，是否update(kcp需要上层通过不断的ikcp_update和ikcp_check来驱动kcp的收发过程)
 	IUINT32 ts_probe, probe_wait;
 	IUINT32 dead_link, incr;
-	struct IQUEUEHEAD snd_queue; // ���Ͷ��У�sendʱ��Segment����
-	struct IQUEUEHEAD rcv_queue; // ���ն��У�recvʱ�����ջ�����Segment������ն���
-	struct IQUEUEHEAD snd_buf; // ���ͻ�������updateʱ��Segment�ӷ��Ͷ��з��뻺����
-	struct IQUEUEHEAD rcv_buf; // ���ջ���������ŵײ���յ�����Segment
-	IUINT32 *acklist; // ack�б��������յ��İ�ack������������δ��sn��ts
-	IUINT32 ackcount; // ack����
-	IUINT32 ackblock; // acklist��С
+	struct IQUEUEHEAD snd_queue; // 发送队列：send时将Segment放入
+	struct IQUEUEHEAD rcv_queue; // 接收队列：recv时将接收缓冲区rcv_buf中的Segment移入接收队列
+	struct IQUEUEHEAD snd_buf; // 发送缓冲区：update时将Segment从发送队列放入缓冲区
+	struct IQUEUEHEAD rcv_buf; // 接收缓冲区：存放底层接收的数据Segment
+	IUINT32 *acklist; // ack列表，所有收到的包ack将放在这里，依次存放sn和ts
+	IUINT32 ackcount; // ack数量
+	IUINT32 ackblock; // acklist大小
 	void *user;
-	char *buffer;
-	int fastresend; // ack������Ӧ���������ش�
-	int nocwnd, stream; // ���������ء���ģʽ
+	char *buffer; // 存储消息字节流的内存
+	int fastresend; // 触发快速重传的重复ack个数
+	int nocwnd, stream; // 非退让流控、流模式
 	int logmask;
-	int(*output)(const char *buf, int len, struct IKCPCB *kcp, void *user); // �ײ����紫�亯��
+	int(*output)(const char *buf, int len, struct IKCPCB *kcp, void *user); // 底层网络传输函数
 	void(*writelog)(const char *log, struct IKCPCB *kcp, void *user);
 };
 
