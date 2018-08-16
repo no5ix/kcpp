@@ -1,6 +1,6 @@
 # KCP源码注释
 
-本项目是注释版的 kcp 源码， 方便自己学习也为大家更快的上手, 原始代码来自： https://github.com/skywind3000/kcp
+本项目是注释版的 kcp 源码， 方便自己学习也为大家更快的上手, 原始代码来自： https://github.com/skywind3000/kcp , 感谢 skywind3000 带来这么短小精悍的好项目
 
 注 : 项目中使用 tab 缩进且设置了tab = 2 space
 
