@@ -5,9 +5,9 @@
 
 # KCP源码注释
 
-本项目是注释版的 kcp 源码， 方便自己学习也为大家更快的上手, 原始代码来自： https://github.com/skywind3000/kcp , 感谢 skywind3000 带来这么短小精悍的好项目
+本项目是注释版的kcp源码， 算是另一种的 kcp详解, 方便自己学习也为大家更快的上手, 原始代码来自： https://github.com/skywind3000/kcp , 感谢 skywind3000 带来这么短小精悍的好项目
 
-对 FPS / MOBA 类实时对战游戏感兴趣的读者还可以移步 [realtime-server](https://github.com/no5ix/realtime-server) , 欢迎交流
+对 FPS / MOBA 类实时对战游戏开源项目感兴趣的读者还可以移步 [realtime-server](https://github.com/no5ix/realtime-server) , 欢迎交流
 
 注 : 项目中使用 tab 缩进且设置了tab = 2 space
 
