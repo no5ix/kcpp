@@ -3,6 +3,15 @@
 
 因为 KCP 官方群已经满了, 可以加群 496687140
 
+
+# 轻量级的kcp会话wrapper
+
+`KcpSession`真正实现了只需要随意写几行代码就可以用上kcp, 而无需烦心如何组织代码来适配kcp
+
+- 只需包含 `KcpSession.h` 这一个头文件即可
+- 只需调用 `KcpSession::Send` 和 `KcpSession::Recv` 和 `KcpSession::Update` 即可完成UDP的链接状态管理、会话控制、 RUDP协议调度
+
+
 # KCP源码注释
 
 本项目是注释版的kcp源码， 算是另一种的 kcp详解, 方便自己学习也为大家更快的上手, 原始代码来自： https://github.com/skywind3000/kcp , 感谢 skywind3000 带来这么短小精悍的好项目
