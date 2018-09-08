@@ -1,3 +1,6 @@
+# CMake 最低版本号要求
+cmake_minimum_required (VERSION 2.8)
+
 set (LIB_KCP kcp)
 
 IF(UNIX)
@@ -8,6 +11,9 @@ IF(UNIX)
 
     add_library(${LIB_KCP} ${kcp_SRCS})
     target_link_libraries(${LIB_KCP})
+
+    # support C++11
+    SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++0x")
 
     add_executable(ServerTestKcpSession TestKcpSessionServer.cpp)
     target_link_libraries(ServerTestKcpSession ${LIB_KCP})
