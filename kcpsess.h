@@ -148,7 +148,8 @@
 #endif
 
 
-
+namespace kcpsess
+{
 
 // a light weight buf.
 // thx chensuo, copy from muduo and make it safe to prepend data of any length.
@@ -635,9 +636,32 @@ private:
 	bool isFinishedThisRound_;
 };
 
-
 class KcpSession
 {
+public:
+	struct InputData
+	{
+		InputData(char *data = nullptr, const int len = 0)
+		{
+			this->len_ = len;
+			if (len > 0)
+				this->data_ = data;
+			else
+				this->data_ = nullptr;
+		}
+
+		InputData SetAndReturnSelf(char *data, const int len)
+		{
+			this->len_ = len;
+			if (len > 0)
+				this->data_ = data;
+			return *this;
+		}
+
+		char* data_;
+		int len_;
+	};
+
 public:
 	static const int kMaxSeparatePktSize =
 		(1460 - (Fec::kRedundancyCnt_ * (Fec::kSnLen + Fec::kDataLen))) / Fec::kRedundancyCnt_;
@@ -648,7 +672,7 @@ public:
 	enum FecStateE { kFecEnable = 233, kFecDisable };
 
 	typedef std::function<void(const void* data, int len)> OutputFunction;
-	typedef std::function<int(char* data)> InputFunction;
+	typedef std::function<InputData()> InputFunction;
 	typedef std::function<IUINT32()> CurrentTimeCallBack;
 
 public:
@@ -728,13 +752,13 @@ public:
 	{
 		if (fec_.IsFinishedThisRound_())
 		{
-			auto rawRecvlen = inputFunc_(data);
-			if (rawRecvlen <= 0)
+			const InputData& rawRecvdata = inputFunc_();
+			if (rawRecvdata.len_ <= 0)
 			{
 				len = -10;
 				return false;
 			}
-			inputBuf_.append(data, static_cast<size_t>(rawRecvlen));
+			inputBuf_.append(rawRecvdata.data_, rawRecvdata.len_);
 		}
 		return fec_.Input(data, len, &inputBuf_);
 	}
@@ -937,3 +961,5 @@ private:
 	int rx_minrto_;
 };
 typedef std::shared_ptr<KcpSession> KcpSessionPtr;
+
+}
