@@ -152,7 +152,7 @@ namespace kcpsess
 {
 
 // a light weight buf.
-// thx chensuo, copy from muduo and make it safe to prepend data of any length.
+// thx to chensuo, copy from muduo and make it safe to prepend data of any length.
 
 /// A buffer class modeled after org.jboss.netty.buffer.ChannelBuffer
 ///
@@ -650,14 +650,6 @@ public:
 				this->data_ = nullptr;
 		}
 
-		InputData SetAndReturnSelf(char *data, const int len)
-		{
-			this->len_ = len;
-			if (len > 0)
-				this->data_ = data;
-			return *this;
-		}
-
 		char* data_;
 		int len_;
 	};
@@ -671,7 +663,7 @@ public:
 	enum PktTypeE { kSyn = 66, kAck, kPsh, kFin, kRst };
 	enum FecStateE { kFecEnable = 233, kFecDisable };
 
-	typedef std::function<void(const void* data, int len)> OutputFunction;
+	typedef std::function<void(const void* pendingSendData, int pendingSendDataLen)> OutputFunction;
 	typedef std::function<InputData()> InputFunction;
 	typedef std::function<IUINT32()> CurrentTimeCallBack;
 
@@ -747,7 +739,7 @@ public:
 		return 0;
 	}
 
-	// returns IsAnyDataLeft
+	// returns IsAnyDataLeft, len below zero for error
 	bool Recv(char* data, int& len)
 	{
 		if (fec_.IsFinishedThisRound_())
@@ -946,7 +938,6 @@ private:
 	RoleTypeE role_;
 	std::queue<std::string> sndQueueBeforeConned_;
 	Fec fec_;
-	bool isFecEnable_;
 
 private:
 	// kcp config...

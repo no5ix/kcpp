@@ -41,7 +41,6 @@ void udp_output(const void *buf, int len, int fd, struct sockaddr* dst)
 	::sendto(fd, buf, len, 0, dst, sizeof(*dst));
 }
 
-KcpSession::InputData kcpsessInputData;
 KcpSession::InputData udp_input(char *buf, int len, int fd, struct sockaddr_in from)
 {
 	socklen_t fromAddrLen = sizeof(from);
@@ -52,7 +51,7 @@ KcpSession::InputData udp_input(char *buf, int len, int fd, struct sockaddr_in f
 	{
 		printf("recieve data fail!\n");
 	}
-	return kcpsessInputData.SetAndReturnSelf(buf, recvLen);
+	return KcpSession::InputData(buf, recvLen);
 }
 
 
