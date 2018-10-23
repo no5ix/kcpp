@@ -66,7 +66,7 @@ KcpSession::InputData udp_input(char* buf, int len, int fd, struct sockaddr_in* 
 	else
 	{
 		isSimulatingPackageLoss = 
-			GetRandomFloatFromZeroToOne() > 0.8 ? true : false; // simulate package loss rate 80%
+			GetRandomFloatFromZeroToOne() > 0.8 ? true : false; // simulate package loss rate 20%
 		if (isSimulatingPackageLoss && nextRcvIndex <= testPassIndex)
 		{
 			printf("server: simulate package loss!!\n");
