@@ -1,14 +1,21 @@
 #include <stdio.h>
 #include <sys/types.h>
-#include <sys/socket.h>
 #include <fcntl.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <sys/time.h>
 #include <string.h>
-#include <unistd.h>
 #include <random>
 #include <string>
+
+#ifndef _WIN32 
+	#include <sys/socket.h>
+	#include <netinet/in.h>
+	#include <arpa/inet.h>
+	#include <sys/time.h>
+	#include <unistd.h>
+#else
+	#include <WinSock2.h>
+	#include <WS2tcpip.h>
+	#include <time.h>
+#endif
 
 #include "kcpsess.h"
 
@@ -16,12 +23,34 @@
 #define SERVER_PORT 8888
 
 // because `int result = kcpServer.Send(sndBuf, SND_BUFF_LEN, KcpSession::DataTypeE::kUnreliable);`
-// in `KcpSession::DataTypeE::kUnreliable` mode, SND_BUFF_LEN should less than `KcpSession::mtu_`
+// in `KcpSession::DataTypeE::kUnreliable` mode, SND_BUFF_LEN should less than `KcpSession::kMaxSeparatePktSize`
 #define SND_BUFF_LEN KcpSession::kMaxSeparatePktSize
 #define RCV_BUFF_LEN 1500
 
 using kcpsess::KcpSession;
 
+
+#ifdef WIN32
+inline int
+gettimeofday(struct timeval *tp, void *tzp)
+{
+	time_t clock;
+	struct tm tm;
+	SYSTEMTIME wtm;
+	GetLocalTime(&wtm);
+	tm.tm_year = wtm.wYear - 1900;
+	tm.tm_mon = wtm.wMonth - 1;
+	tm.tm_mday = wtm.wDay;
+	tm.tm_hour = wtm.wHour;
+	tm.tm_min = wtm.wMinute;
+	tm.tm_sec = wtm.wSecond;
+	tm.tm_isdst = -1;
+	clock = mktime(&tm);
+	tp->tv_sec = static_cast<long>(clock);
+	tp->tv_usec = wtm.wMilliseconds * 1000;
+	return (0);
+}
+#endif
 
 IUINT32 iclock()
 {
@@ -47,7 +76,7 @@ float GetRandomFloatFromZeroToOne()
 
 void udp_output(const void *buf, int len, int fd, struct sockaddr_in* dst)
 {
-	sendto(fd, buf, len, 0, (struct sockaddr*)dst, sizeof(*(struct sockaddr*)dst));
+	sendto(fd, (const char*)buf, len, 0, (struct sockaddr*)dst, sizeof(*(struct sockaddr*)dst));
 }
 
 const uint32_t testPassIndex = 222;
@@ -58,18 +87,13 @@ KcpSession::InputData udp_input(char* buf, int len, int fd, struct sockaddr_in* 
 	socklen_t fromAddrLen = sizeof(*from);
 	int recvLen = ::recvfrom(fd, buf, len, 0,
 		(struct sockaddr*)from, &fromAddrLen);
-	//printf("recvfrom() = %d \n", static_cast<int>(recvLen));
-	if (recvLen <= 0)
-	{
-		printf("recieve data fail!\n");
-	}
-	else
+	if (recvLen > 0)
 	{
 		isSimulatingPackageLoss = 
 			GetRandomFloatFromZeroToOne() > 0.8 ? true : false; // simulate package loss rate 20%
 		if (isSimulatingPackageLoss && nextRcvIndex <= testPassIndex)
 		{
-			printf("server: simulate package loss!!\n");
+			//printf("server: simulate package loss!!\n");
 			recvLen = 0;
 		}
 	}
@@ -89,7 +113,10 @@ void handle_udp_msg(int fd)
 		std::bind(udp_input, rcvBuf, RCV_BUFF_LEN, fd, clientAddr),
 		std::bind(iclock));
 
+	//kcpServer.SetKcpConfig(10240, 10240, 1, 1, 1, 1, 0, 300, 5);
+
 	int len = 0;
+	uint32_t index = 0;
 
 	while (1)
 	{
@@ -98,40 +125,30 @@ void handle_udp_msg(int fd)
 
 		while (kcpServer.Recv(rcvBuf, len))
 		{
-			//len = kcpServer.Recv(rcvBuf);
-			//printf("IsKcpConnected() = %d\n", kcpServer.IsKcpConnected());
-			//printf("len = kcpServer.Recv(rcvBuf) = %d\n", len);
 			if (len < 0 && !isSimulatingPackageLoss)
 			{
 				printf("kcpSession Recv failed, Recv() = %d \n", len);
 			}
 			else if (len > 0)
 			{
-				uint32_t index = *(uint32_t*)(rcvBuf + 0);
+				index = *(uint32_t*)(rcvBuf + 0);
+
+				if (index <= testPassIndex)
+					printf("reliable msg from client: %d\n", (int)index);
 
 				if (index == testPassIndex)
-				{
-					printf("client:%d\n", (int)index);
-					//printf("when server have recieved the max index >= %d, test passes, yay! \n", maxIndex);  //打印server发过来的信息
-					printf("test passes, yay! \n");
-				}
-				else if (index < testPassIndex)
-				{
-					printf("client:%d\n", (int)index);
-				}
+					printf("test passes, yay! \n please close me ...\n");
 
 				if (kcpServer.IsKcpConnected() && index != nextRcvIndex)
 				{
 					// 如果收到的包不连续
-					printf("ERROR index<->nextRcvIndex : %d<->%d, kcpServer.IsKcpConnected() = %d\n",
-						(int)index, (int)nextRcvIndex, (kcpServer.IsKcpConnected() ? 1 : 0));
+					printf("ERROR index != nextRcvIndex : %d != %d, kcpServer.IsKcpConnected() = %d\n", (int)index, (int)nextRcvIndex, (kcpServer.IsKcpConnected() ? 1 : 0));
 					return;
 				}
 				++nextRcvIndex;
 
 				((uint32_t*)sndBuf)[0] = nextRcvIndex - 1;
 				int result = kcpServer.Send(sndBuf, SND_BUFF_LEN, KcpSession::TransmitModeE::kUnreliable);
-				//printf("kcpServer.Sendddddd()d\n");
 				if (result < 0)
 				{
 					printf("kcpSession Send failed\n");
@@ -139,18 +156,22 @@ void handle_udp_msg(int fd)
 				}
 			}
 		}
-		//printf("kcpServer.Uuuuuuuuuupdate()d\n");
 		kcpServer.Update();
 	}
 }
 
 
-/*
-		server:
-						socket-->bind-->recvfrom-->sendto-->close
-*/
 int main(int argc, char* argv[])
 {
+#ifdef _WIN32
+	WSADATA  Ws;
+	//Init Windows Socket
+	if (WSAStartup(MAKEWORD(2, 2), &Ws) != 0)
+	{
+		printf("Init Windows Socket Failed");
+		return -1;
+	}
+#endif
 	srand(static_cast<uint32_t>(time(nullptr)));
 
 	int server_fd, ret;
@@ -177,6 +198,11 @@ int main(int argc, char* argv[])
 
 	handle_udp_msg(server_fd);
 
+#ifndef _WIN32
 	close(server_fd);
+#else
+	closesocket(server_fd);
+#endif // !_WIN32
+
 	return 0;
 }

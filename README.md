@@ -11,6 +11,15 @@
 - 只需包含 `kcpsess.h` 这一个头文件即可
 - 只需调用 `KcpSession::Send` 和 `KcpSession::Recv` 和 `KcpSession::Update` 即可完成UDP的链接状态管理、会话控制、 RUDP协议调度
 
+# Features
+
+- single-header-only
+- session implementation
+- fec support
+- two-channel
+   - reliable
+   - unreliable
+
 # kcpsess Examples
 
 - [realtime-server](https://github.com/no5ix/realtime-server) : A realtime dedicated game server ( FPS / MOBA ). 一个实时的专用游戏服务器.
@@ -56,14 +65,6 @@ End
 
 The Recv/Send/Update functions of kcpsess are guaranteed to be non-blocking.
 Please read [TestKcpSessionClient.cpp](https://github.com/no5ix/kcpsess/blob/master/TestKcpSessionClient.cpp) and [TestKcpSessionServer.cpp](https://github.com/no5ix/kcpsess/blob/master/TestKcpSessionServer.cpp) for some basic usage.
-
-
-# kcpsess build & test
-
-1. ` cmake . `
-2. ` make `
-3. ` ./ServerTestKcpSession `
-4. ` ./ClientTestKcpSession `
 
 
 # kcp源码注释
