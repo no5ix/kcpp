@@ -19,6 +19,10 @@
 
 #define SERVER_PORT 8888
 
+// if u modify this `TEST_APPLICATION_LEVEL_CONGESTION_CONTROL`,
+// u have to update this var of the server side to have the same value.
+#define TEST_APPLICATION_LEVEL_CONGESTION_CONTROL 1
+
 #define SND_BUFF_LEN 1500
 #define RCV_BUFF_LEN 1500
 
@@ -86,7 +90,6 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 	struct sockaddr_in from;
 	int len = 0;
 	uint32_t index = 11;
-	const uint32_t testPassIndex = 222;
 
 	KcpSession kcpClient(
 		KcpSession::RoleTypeE::kCli,
@@ -94,22 +97,41 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 		std::bind(udp_input, rcvBuf, RCV_BUFF_LEN, fd, std::ref(from)),
 		std::bind(iclock));
 
-	//kcpClient.SetKcpConfig(10240, 10240, 1, 1, 1, 1, 0, 300, 5);
 
+#if TEST_APPLICATION_LEVEL_CONGESTION_CONTROL
+
+	const uint32_t testPassIndex = 66666;
+	kcpClient.SetKcpConfig(1024, 1024, 4096, 1, 1, 1, 1, 0, 300, 5);
 	while (1)
 	{
-		memset(rcvBuf, 0, RCV_BUFF_LEN);
-		memset(sndBuf, 0, SND_BUFF_LEN);
 
-		((uint32_t*)sndBuf)[0] = index++;
+#else
 
-		len = kcpClient.Send(sndBuf, SND_BUFF_LEN);
-		if (len < 0)
+	const uint32_t testPassIndex = 666;
+	while (1)
+	{
+	#ifndef _WIN32
+		usleep(16666); // 60fps
+	#else
+		Sleep(16666 / 1000);
+	#endif // !_WIN32
+
+#endif // TEST_APPLICATION_LEVEL_CONGESTION_CONTROL
+
+		if (kcpClient.IsNoNeedToWait())
 		{
-			printf("kcpSession Send failed\n");
-			return;
+			memset(sndBuf, 0, SND_BUFF_LEN);
+			((uint32_t*)sndBuf)[0] = index++;
+
+			len = kcpClient.Send(sndBuf, SND_BUFF_LEN);
+			if (len < 0)
+			{
+				printf("kcpSession Send failed\n");
+				return;
+			}
 		}
 
+		memset(rcvBuf, 0, RCV_BUFF_LEN);
 		while (kcpClient.Recv(rcvBuf, len))
 		{
 			if (len < 0)
@@ -129,11 +151,6 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 		}
 
 		kcpClient.Update();
-#ifndef _WIN32
-		usleep(16666); // 60fps
-#else
-		Sleep(16666 / 1000);
-#endif // !_WIN32
 	}
 }
 

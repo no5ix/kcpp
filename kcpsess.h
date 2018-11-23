@@ -667,6 +667,7 @@ public:
 	typedef std::function<InputData()> InputFunction;
 	typedef std::function<IUINT32()> CurrentTimeCallBack;
 
+// basic API
 public:
 	KcpSession(const RoleTypeE role,
 		const OutputFunction& outputFunc,
@@ -684,6 +685,7 @@ public:
 			std::placeholders::_2, std::placeholders::_3)),
 		sndWnd_(128),
 		rcvWnd_(128),
+		maxWaitSndCount_(2*sndWnd_),
 		nodelay_(1),
 		interval_(10),
 		resend_(1),
@@ -755,22 +757,30 @@ public:
 		return fec_.Input(data, len, &inputBuf_);
 	}
 
+// advanced API
 public:
+	ikcpcb* GetKcp() const { return kcp_; }
+
+	// for Application-level Congestion Control
+	bool IsNoNeedToWait() const { return kcp_ ? ikcp_waitsnd(kcp_) < maxWaitSndCount_ : true; }
+
 	bool IsKcpConnected() const { return kcpConnState_ == kConnected; }
 
 	// should set before Send()
 	void SetKcpConfig(
-		const int sndWnd, const int rcvWnd, const int nodelay,
-		const int interval, const int resend, const int nc,
+		const int sndWnd, const int rcvWnd, const int maxWaitSndCount,
+		const int nodelay, const int interval, const int resend, const int nc,
 		const int streamMode, const int mtu, const int rx_minrto)
 	{
 		assert(mtu <= kMaxSeparatePktSize);
-		sndWnd_ = sndWnd; rcvWnd_ = rcvWnd; nodelay_ = nodelay;
-		interval_ = interval; resend_ = resend; nc_ = nc;
+		assert(maxWaitSndCount > sndWnd);
+		sndWnd_ = sndWnd; rcvWnd_ = rcvWnd; maxWaitSndCount_ = maxWaitSndCount;
+		nodelay_ = nodelay; interval_ = interval; resend_ = resend; nc_ = nc;
 		streamMode_ = streamMode; mtu_ = mtu; rx_minrto_ = rx_minrto;
 	}
 
 	~KcpSession() { if (kcp_) ikcp_release(kcp_); }
+
 
 private:
 	friend void Fec::Output(Buf*);
@@ -943,6 +953,7 @@ private:
 	// kcp config...
 	int sndWnd_;
 	int rcvWnd_;
+	int maxWaitSndCount_;
 	int nodelay_;
 	int interval_;
 	int resend_;

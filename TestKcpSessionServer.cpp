@@ -25,7 +25,12 @@
 // because `int result = kcpServer.Send(sndBuf, SND_BUFF_LEN, KcpSession::DataTypeE::kUnreliable);`
 // in `KcpSession::DataTypeE::kUnreliable` mode, SND_BUFF_LEN should less than `KcpSession::kMaxSeparatePktSize`
 #define SND_BUFF_LEN KcpSession::kMaxSeparatePktSize
+
 #define RCV_BUFF_LEN 1500
+
+// if u modify this `TEST_APPLICATION_LEVEL_CONGESTION_CONTROL`,
+// u have to update this var of the client side to have the same value.
+#define TEST_APPLICATION_LEVEL_CONGESTION_CONTROL 1
 
 using kcpsess::KcpSession;
 
@@ -79,8 +84,6 @@ void udp_output(const void *buf, int len, int fd, struct sockaddr_in* dst)
 	sendto(fd, (const char*)buf, len, 0, (struct sockaddr*)dst, sizeof(*(struct sockaddr*)dst));
 }
 
-const uint32_t testPassIndex = 222;
-uint32_t nextRcvIndex = 11;
 bool isSimulatingPackageLoss = false;
 KcpSession::InputData udp_input(char* buf, int len, int fd, struct sockaddr_in* from)
 {
@@ -91,7 +94,7 @@ KcpSession::InputData udp_input(char* buf, int len, int fd, struct sockaddr_in* 
 	{
 		isSimulatingPackageLoss = 
 			GetRandomFloatFromZeroToOne() > 0.8 ? true : false; // simulate package loss rate 20%
-		if (isSimulatingPackageLoss && nextRcvIndex <= testPassIndex)
+		if (isSimulatingPackageLoss)
 		{
 			//printf("server: simulate package loss!!\n");
 			recvLen = 0;
@@ -106,6 +109,9 @@ void handle_udp_msg(int fd)
 	char rcvBuf[RCV_BUFF_LEN];
 
 	struct sockaddr_in* clientAddr = new struct sockaddr_in;  //clent_addr用于记录发送方的地址信息
+	uint32_t nextRcvIndex = 11;
+	int len = 0;
+	uint32_t index = 0;
 
 	KcpSession kcpServer(
 		KcpSession::RoleTypeE::kSrv,
@@ -113,16 +119,22 @@ void handle_udp_msg(int fd)
 		std::bind(udp_input, rcvBuf, RCV_BUFF_LEN, fd, clientAddr),
 		std::bind(iclock));
 
-	//kcpServer.SetKcpConfig(10240, 10240, 1, 1, 1, 1, 0, 300, 5);
 
-	int len = 0;
-	uint32_t index = 0;
+#if TEST_APPLICATION_LEVEL_CONGESTION_CONTROL
+
+	const uint32_t testPassIndex = 66666;
+	kcpServer.SetKcpConfig(1024, 1024, 4096, 1, 1, 1, 1, 0, 300, 5);
+
+#else
+
+	const uint32_t testPassIndex = 666;
+
+#endif // TEST_APPLICATION_LEVEL_CONGESTION_CONTROL
+
 
 	while (1)
 	{
 		memset(rcvBuf, 0, RCV_BUFF_LEN);
-		memset(sndBuf, 0, SND_BUFF_LEN);
-
 		while (kcpServer.Recv(rcvBuf, len))
 		{
 			if (len < 0 && !isSimulatingPackageLoss)
@@ -147,6 +159,7 @@ void handle_udp_msg(int fd)
 				}
 				++nextRcvIndex;
 
+				memset(sndBuf, 0, SND_BUFF_LEN);
 				((uint32_t*)sndBuf)[0] = nextRcvIndex - 1;
 				int result = kcpServer.Send(sndBuf, SND_BUFF_LEN, KcpSession::TransmitModeE::kUnreliable);
 				if (result < 0)
