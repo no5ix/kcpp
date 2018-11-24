@@ -49,12 +49,12 @@ while (!isGameOver)
             Game.HandleRecvData(data, len)
         else if (len < 0)
             Game.HandleRecvError(len);
-    
-		if (myKcpSess.CheckCanSend())
+
+        if (myKcpSess.CheckCanSend())
             myKcpSess.Send(data, len)
         else
             Game.HandleCanNotSendForNow()
-            
+
     myKcpSess.Update()
     Game.Logic()
     Game.Render()
