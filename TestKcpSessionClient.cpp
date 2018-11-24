@@ -118,7 +118,7 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 
 #endif // TEST_APPLICATION_LEVEL_CONGESTION_CONTROL
 
-		if (kcpClient.IsNoNeedToWait())
+		if (kcpClient.CheckCanSend())
 		{
 			memset(sndBuf, 0, SND_BUFF_LEN);
 			((uint32_t*)sndBuf)[0] = index++;

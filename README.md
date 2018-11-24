@@ -33,34 +33,31 @@
 the main loop was supposed as:
 
 ``` c++
-GameInit()
+Game.Init()
 
 // kcpsess init
-KcpSession kcpClient(
+KcpSession myKcpSess(
     KcpSession::RoleTypeE,
     std::bind(udp_output, _1, _2),
     std::bind(udp_input),
     std::bind(timer));
 
-While (!isGameOver) Do      // e.g:  A 30FPS Game
+while (!isGameOver)
 
-       while (KCPSESS.Recv(data, len))
-       {
-           if (len > 0)
-           {
-               Game.HandleRecvData(data, len)
-           }
-           else if (len < 0)
-           {
-               Game.HandleRecvError(len);
-           }
-       }
-       KCPSESS.Send(data, len)
-       KCPSESS.Update()
-       Game.Logic()
-       Game.Render()
-       Wait(33ms)   // clock
-End
+    while (myKcpSess.Recv(data, len))
+        if (len > 0)
+            Game.HandleRecvData(data, len)
+        else if (len < 0)
+            Game.HandleRecvError(len);
+    
+		if (myKcpSess.CheckCanSend())
+            myKcpSess.Send(data, len)
+        else
+            Game.HandleCanNotSendForNow()
+            
+    myKcpSess.Update()
+    Game.Logic()
+    Game.Render()
 ```
 
 The Recv/Send/Update functions of kcpsess are guaranteed to be non-blocking.
