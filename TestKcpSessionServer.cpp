@@ -19,12 +19,12 @@
 
 #include "kcpsess.h"
 
+using kcpsess::KcpSession;
 
 #define SERVER_PORT 8888
 
-// because `int result = kcpServer.Send(sndBuf, SND_BUFF_LEN, KcpSession::DataTypeE::kUnreliable);`
-// in `KcpSession::DataTypeE::kUnreliable` mode, SND_BUFF_LEN should less than `KcpSession::kMaxSeparatePktSize`
-#define SND_BUFF_LEN KcpSession::kMaxSeparatePktSize
+//#define SND_BUFF_LEN kcpsess::Fec::kMaxSeparatePktDataSize
+#define SND_BUFF_LEN 9567
 
 #define RCV_BUFF_LEN 1500
 
@@ -32,7 +32,6 @@
 // u have to update this var of the client side to have the same value.
 #define TEST_APPLICATION_LEVEL_CONGESTION_CONTROL 1
 
-using kcpsess::KcpSession;
 
 
 #ifdef WIN32

@@ -4,6 +4,7 @@
 #include <memory>
 #include <queue>
 #include <deque>
+#include <map>
 #include <string>
 #include <algorithm>
 #include <vector>
@@ -552,33 +553,80 @@ private:
 };
 
 
+typedef std::function<void(const void* pendingSendData, int pendingSendDataLen)> OutputFunction;
+
 class Fec
 {
 public:
+	static const size_t kMaxFrgCnt = 128;
+	static const size_t kRedundancyCnt_ = 3;
+	//static const size_t kMaxSeparatePktSize = 1460 / kRedundancyCnt_;
+
 	static const size_t kDataLen = sizeof(int16_t);
 	static const size_t kSnLen = sizeof(int32_t);
-	static const int kRedundancyCnt_ = 3;
-	static const int kMaxDataLen = 1460 - kDataLen - kSnLen;
+	static const size_t kFrgLen = sizeof(int8_t);
+	static const size_t kFrgCntLen = sizeof(int8_t);
+	static const size_t kHeaderLen = kDataLen + kSnLen + kFrgLen + kFrgCntLen;
+	static const size_t kMaxSeparatePktDataSize = (1460 - (kRedundancyCnt_ * kHeaderLen)) / kRedundancyCnt_;
+
 	typedef std::function<void(Buf*, int&, int)> RecvFuncion;
 public:
-	Fec(const RecvFuncion& rcvFunc)
-		: count_(0), nextSndSn_(0), nextRcvSn_(0),
-		index_(0), rcvFunc_(rcvFunc), isFinishedThisRound_(true)
+	Fec(const OutputFunction& outputFunc, const RecvFuncion& rcvFunc)
+		: nextSndSn_(0), nextRcvSn_(0),
+		userOutputFunc_(outputFunc), rcvFunc_(rcvFunc), isFinishedThisRound_(true)
 	{}
 
-	void Output(Buf* oBuf)
+	int Output(Buf* oBuf)
 	{
-		oBuf->prependInt16(static_cast<int16_t>(oBuf->readableBytes()));
-		oBuf->prependInt32(nextSndSn_++);
-		outputQueue_.push_back(std::string(oBuf->peek(), oBuf->readableBytes()));
+		size_t curLen = oBuf->readableBytes();
+		int frgCnt = 0;
+		if (curLen <= kMaxSeparatePktDataSize)
+			frgCnt = 1;
+		else
+			frgCnt = (curLen + kMaxSeparatePktDataSize - 1) / kMaxSeparatePktDataSize;
 
-		count_ = outputQueue_.size();
-		for (index_ = count_ - 1; index_ >= 0; --index_)
+		if ((IUINT32)frgCnt >= kMaxFrgCnt)
 		{
-			oBuf->prepend(*(outputQueue_.begin() + index_));
+			oBuf->retrieveAll();
+			return -1;
 		}
-		if (count_ == kRedundancyCnt_)
-			outputQueue_.pop_front();
+
+		int curSize = 0;
+		for (int i = 0; i < frgCnt; ++i)
+		{
+			curSize = curLen > kMaxSeparatePktDataSize ? kMaxSeparatePktDataSize : curLen;
+			oBuf->prependInt16(static_cast<int16_t>(curSize));
+			oBuf->prependInt8(static_cast<int8_t>(frgCnt - i - 1));
+			oBuf->prependInt8(static_cast<int8_t>(frgCnt));
+			oBuf->prependInt32(nextSndSn_++);
+			outputQueue_.push_back(std::string(oBuf->peek(), kHeaderLen + curSize));
+			oBuf->retrieve(kHeaderLen + curSize);
+			curLen -= curSize;
+		}
+		assert(curLen == 0);
+
+		for (size_t i = 0; i < outputQueue_.size(); ++i)
+		{
+			assert(this->userOutputFunc_ != nullptr);
+			oBuf->append(*(outputQueue_.begin() + i));
+
+			if (i == kRedundancyCnt_ - 1)
+			{
+				outputQueue_.pop_front();
+				i = -1;
+				userOutputFunc_(oBuf->peek(), oBuf->readableBytes());
+				oBuf->retrieveAll();
+				if (outputQueue_.size() < kRedundancyCnt_)
+					break;
+			}
+			else if (i == outputQueue_.size() - 1)
+			{
+				assert(outputQueue_.size() <= 2);
+				userOutputFunc_(oBuf->peek(), oBuf->readableBytes());
+				oBuf->retrieveAll();
+			}
+		}
+		return 0;
 	}
 
 	bool Input(Buf* userBuf, int& len, Buf* iBuf)
@@ -586,23 +634,58 @@ public:
 		bool hasData = IsThereAnyDataLeft(iBuf);
 		if (hasData)
 		{
+			auto discardRcvedData = [&]() { iBuf->retrieve(iBuf->readInt16()); len = 0; };
 			isFinishedThisRound_ = false;
-			int32_t recvSn = iBuf->readInt32();
-			if (recvSn >= nextRcvSn_)
+			int32_t rcvSn = iBuf->readInt32();
+			int8_t rcvFrgCnt = iBuf->readInt8();
+			int8_t rcvFrg = iBuf->readInt8();
+
+			if (rcvSn >= nextRcvSn_)
 			{
-				nextRcvSn_ = ++recvSn;
-				rcvFunc_(userBuf, len, iBuf->readInt16());
+				nextRcvSn_ = ++rcvSn;
+				if (rcvFrg != 0)
+				{
+					bool isHeadFrg = (rcvFrg == rcvFrgCnt - 1);
+					if (isHeadFrg)
+						inputFrgMap_.clear();
+
+					if (isHeadFrg || inputFrgMap_.find(rcvSn - 1) != inputFrgMap_.end())
+						inputFrgMap_.emplace(std::make_pair(rcvSn, std::string(iBuf->peek() + kDataLen, iBuf->peekInt16())));
+
+					discardRcvedData();
+				}
+				else if (rcvFrg == 0)
+				{
+					if (inputFrgMap_.find(rcvSn - 1) != inputFrgMap_.end())
+					{
+						size_t sumDataLen = iBuf->readInt16();
+						for (int sn = rcvSn - 1; sn >= rcvSn - rcvFrgCnt + 1; --sn)
+						{
+							iBuf->prepend(inputFrgMap_[sn]);
+							sumDataLen += inputFrgMap_[sn].size();
+						}
+						rcvFunc_(userBuf, len, sumDataLen);
+					}
+					else if (rcvFrgCnt > 1)
+					{
+						discardRcvedData();
+					}
+					else if (rcvFrgCnt == 1)
+					{
+						rcvFunc_(userBuf, len, iBuf->readInt16());
+					}
+				}
 			}
-			else
+			else if (rcvSn < nextRcvSn_)
 			{
-				iBuf->retrieve(iBuf->readInt16());
-				len = 0;
+				discardRcvedData();
 			}
 		}
-		else
+		else if (!hasData)
 		{
 			iBuf->retrieveAll();
 			isFinishedThisRound_ = true;
+			len = -1;
 		}
 		return hasData;
 	}
@@ -615,24 +698,24 @@ private:
 		if (buf->readableBytes() >= Fec::kSnLen)
 		{
 			int16_t be16 = 0;
-			::memcpy(&be16, buf->peek() + Fec::kSnLen, sizeof be16);
+			::memcpy(&be16, buf->peek() + Fec::kSnLen + Fec::kFrgLen + Fec::kFrgCntLen, sizeof be16);
 			const uint16_t dataLen = be16toh(be16);
 
-			if (dataLen > kMaxDataLen)
+			if (dataLen > kMaxSeparatePktDataSize)
 				return false;
 
-			return buf->readableBytes() >= (dataLen + Fec::kSnLen + Fec::kDataLen);
+			return buf->readableBytes() >= (dataLen + Fec::kHeaderLen);
 		}
 		return false;
 	}
 
 private:
 	RecvFuncion rcvFunc_;
+	OutputFunction userOutputFunc_;
 	std::deque<std::string> outputQueue_;
+	std::map<int, std::string> inputFrgMap_;
 	int32_t nextSndSn_;
 	int32_t nextRcvSn_;
-	int index_;
-	int count_;
 	bool isFinishedThisRound_;
 };
 
@@ -655,15 +738,12 @@ public:
 	};
 
 public:
-	static const int kMaxSeparatePktSize =
-		(1460 - (Fec::kRedundancyCnt_ * (Fec::kSnLen + Fec::kDataLen))) / Fec::kRedundancyCnt_;
 	enum ConnectionStateE { kDisconnected, kConnecting, kConnected, kDisconnecting, kResetting };
 	enum RoleTypeE { kSrv, kCli };
 	enum TransmitModeE { kUnreliable = 88, kReliable };
 	enum PktTypeE { kSyn = 66, kAck, kPsh, kFin, kRst };
 	// enum FecStateE { kFecEnable = 233, kFecDisable };
 
-	typedef std::function<void(const void* pendingSendData, int pendingSendDataLen)> OutputFunction;
 	typedef std::function<InputData()> InputFunction;
 	typedef std::function<IUINT32()> CurrentTimestampCallBack;
 
@@ -676,12 +756,11 @@ public:
 		:
 		role_(role),
 		conv_(0),
-		outputFunc_(outputFunc),
-		inputFunc_(inputFunc),
+		userInputFunc_(inputFunc),
 		curTsCb_(currentTimestampCb),
 		kcp_(nullptr),
 		kcpConnState_(kConnecting),
-		fec_(std::bind(&KcpSession::DoRecv, this, std::placeholders::_1,
+		fec_(outputFunc, std::bind(&KcpSession::DoRecv, this, std::placeholders::_1,
 			std::placeholders::_2, std::placeholders::_3)),
 		nextUpdateTs_(0),
 		sndWnd_(128),
@@ -727,7 +806,9 @@ public:
 		{
 			outputBuf_.appendInt8(kUnreliable);
 			outputBuf_.append(data, len);
-			OutputAfterCheckingFec();
+			int error = OutputAfterCheckingFec();
+			if (error)
+				return error;
 			if (!IsKcpConnected() && role_ == kCli)
 				SendSyn();
 		}
@@ -766,7 +847,7 @@ public:
 	{
 		if (fec_.IsFinishedThisRound_())
 		{
-			const InputData& rawRecvdata = inputFunc_();
+			const InputData& rawRecvdata = userInputFunc_();
 			if (rawRecvdata.len_ <= 0)
 			{
 				len = -10;
@@ -788,7 +869,6 @@ public:
 		const int nodelay = 1, const int interval = 10, const int resend = 1, const int nc = 1,
 		const int streamMode = 0, const int mtu = 300, const int rx_minrto = 10)
 	{
-		assert(mtu <= kMaxSeparatePktSize);
 		assert(maxWaitSndCount > sndWnd);
 		sndWnd_ = sndWnd; rcvWnd_ = rcvWnd; maxWaitSndCount_ = maxWaitSndCount;
 		nodelay_ = nodelay; interval_ = interval; resend_ = resend; nc_ = nc;
@@ -799,7 +879,7 @@ public:
 
 
 private:
-	friend void Fec::Output(Buf*);
+	friend int Fec::Output(Buf*);
 
 	void DoRecv(Buf* userBuf, int& len, int readableLen)
 	{
@@ -941,27 +1021,21 @@ private:
 	{
 		(void)kcp;
 		auto thisPtr = reinterpret_cast<KcpSession *>(user);
-		assert(thisPtr->outputFunc_ != nullptr);
 
 		thisPtr->outputBuf_.appendInt8(kReliable);
 		thisPtr->outputBuf_.appendInt8(kPsh);
 		thisPtr->outputBuf_.append(data, len);
-		thisPtr->OutputAfterCheckingFec();
-
-		return 0;
+		return thisPtr->OutputAfterCheckingFec();
 	}
 
-	void OutputAfterCheckingFec()
+	int OutputAfterCheckingFec() // FIXME
 	{
-		fec_.Output(&outputBuf_);
-		outputFunc_(outputBuf_.peek(), outputBuf_.readableBytes());
-		outputBuf_.retrieveAll();
+		return fec_.Output(&outputBuf_);
 	}
 
 private:
 	ikcpcb* kcp_;
-	OutputFunction outputFunc_;
-	InputFunction inputFunc_;
+	InputFunction userInputFunc_;
 	ConnectionStateE kcpConnState_;
 	Buf outputBuf_;
 	Buf inputBuf_;
