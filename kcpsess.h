@@ -572,8 +572,8 @@ public:
 	typedef std::function<void(Buf*, int&, int)> RecvFuncion;
 public:
 	Fec(const OutputFunction& outputFunc, const RecvFuncion& rcvFunc)
-		: nextSndSn_(0), nextRcvSn_(0),
-		userOutputFunc_(outputFunc), rcvFunc_(rcvFunc), isFinishedThisRound_(true)
+		: userOutputFunc_(outputFunc), rcvFunc_(rcvFunc),
+		nextSndSn_(0), nextRcvSn_(0), isFinishedThisRound_(true)
 	{}
 
 	int Output(Buf* oBuf)
@@ -742,24 +742,25 @@ public:
 	enum RoleTypeE { kSrv, kCli };
 	enum TransmitModeE { kUnreliable = 88, kReliable };
 	enum PktTypeE { kSyn = 66, kAck, kPsh, kFin, kRst };
-	// enum FecStateE { kFecEnable = 233, kFecDisable };
 
 	typedef std::function<InputData()> InputFunction;
 	typedef std::function<IUINT32()> CurrentTimestampCallBack;
-
 
 public:
 	KcpSession(const RoleTypeE role,
 		const OutputFunction& outputFunc,
 		const InputFunction& inputFunc,
-		const CurrentTimestampCallBack& currentTimestampCb)
+		const CurrentTimestampCallBack& currentTimestampCb,
+		bool fecEnable = true)
 		:
 		role_(role),
 		conv_(0),
+		userOutputFunc_(outputFunc),
 		userInputFunc_(inputFunc),
 		curTsCb_(currentTimestampCb),
 		kcp_(nullptr),
 		kcpConnState_(kConnecting),
+		fecEnable_(fecEnable),
 		fec_(outputFunc, std::bind(&KcpSession::DoRecv, this, std::placeholders::_1,
 			std::placeholders::_2, std::placeholders::_3)),
 		nextUpdateTs_(0),
@@ -845,7 +846,21 @@ public:
 	// returns IsAnyDataLeft, len below zero for error
 	bool Recv(Buf* userBuf, int& len)
 	{
-		if (fec_.IsFinishedThisRound_())
+		if (fecEnable_)
+		{
+			if (fec_.IsFinishedThisRound_())
+			{
+				const InputData& rawRecvdata = userInputFunc_();
+				if (rawRecvdata.len_ <= 0)
+				{
+					len = -10;
+					return false;
+				}
+				inputBuf_.append(rawRecvdata.data_, rawRecvdata.len_);
+			}
+			return fec_.Input(userBuf, len, &inputBuf_);
+		}
+		else
 		{
 			const InputData& rawRecvdata = userInputFunc_();
 			if (rawRecvdata.len_ <= 0)
@@ -854,8 +869,8 @@ public:
 				return false;
 			}
 			inputBuf_.append(rawRecvdata.data_, rawRecvdata.len_);
+			DoRecv(userBuf, len, rawRecvdata.len_);
 		}
-		return fec_.Input(userBuf, len, &inputBuf_);
 	}
 
 
@@ -1028,14 +1043,23 @@ private:
 		return thisPtr->OutputAfterCheckingFec();
 	}
 
-	int OutputAfterCheckingFec() // FIXME
+	int OutputAfterCheckingFec()
 	{
-		return fec_.Output(&outputBuf_);
+		if (!fecEnable_)
+		{
+			assert(this->userOutputFunc_ != nullptr);
+			userOutputFunc_(outputBuf_.peek(), outputBuf_.readableBytes());
+			outputBuf_.retrieveAll();
+			return 0;
+		}
+		else
+			return fec_.Output(&outputBuf_);
 	}
 
 private:
 	ikcpcb* kcp_;
 	InputFunction userInputFunc_;
+	OutputFunction userOutputFunc_;
 	ConnectionStateE kcpConnState_;
 	Buf outputBuf_;
 	Buf inputBuf_;
@@ -1043,6 +1067,7 @@ private:
 	IUINT32 conv_;
 	RoleTypeE role_;
 	std::queue<std::string> sndQueueBeforeConned_;
+	bool fecEnable_;
 	Fec fec_;
 	IUINT32 nextUpdateTs_;
 
