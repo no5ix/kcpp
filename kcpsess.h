@@ -559,7 +559,7 @@ public:
 	static const size_t kSnLen = sizeof(int32_t);
 	static const int kRedundancyCnt_ = 3;
 	static const int kMaxDataLen = 1460 - kDataLen - kSnLen;
-	typedef std::function<void(char*, int&, int)> RecvFuncion;
+	typedef std::function<void(Buf*, int&, int)> RecvFuncion;
 public:
 	Fec(const RecvFuncion& rcvFunc)
 		: count_(0), nextSndSn_(0), nextRcvSn_(0),
@@ -581,7 +581,7 @@ public:
 			outputQueue_.pop_front();
 	}
 
-	bool Input(char* data, int& len, Buf* iBuf)
+	bool Input(Buf* userBuf, int& len, Buf* iBuf)
 	{
 		bool hasData = IsThereAnyDataLeft(iBuf);
 		if (hasData)
@@ -591,7 +591,7 @@ public:
 			if (recvSn >= nextRcvSn_)
 			{
 				nextRcvSn_ = ++recvSn;
-				rcvFunc_(data, len, iBuf->readInt16());
+				rcvFunc_(userBuf, len, iBuf->readInt16());
 			}
 			else
 			{
@@ -661,7 +661,7 @@ public:
 	enum RoleTypeE { kSrv, kCli };
 	enum TransmitModeE { kUnreliable = 88, kReliable };
 	enum PktTypeE { kSyn = 66, kAck, kPsh, kFin, kRst };
-	enum FecStateE { kFecEnable = 233, kFecDisable };
+	// enum FecStateE { kFecEnable = 233, kFecDisable };
 
 	typedef std::function<void(const void* pendingSendData, int pendingSendDataLen)> OutputFunction;
 	typedef std::function<InputData()> InputFunction;
@@ -722,6 +722,7 @@ public:
 		assert(data != nullptr);
 		assert(len > 0);
 		assert(dataType == kReliable || dataType == kUnreliable);
+
 		if (dataType == kUnreliable)
 		{
 			outputBuf_.appendInt8(kUnreliable);
@@ -761,7 +762,7 @@ public:
 	}
 
 	// returns IsAnyDataLeft, len below zero for error
-	bool Recv(char* data, int& len)
+	bool Recv(Buf* userBuf, int& len)
 	{
 		if (fec_.IsFinishedThisRound_())
 		{
@@ -773,7 +774,7 @@ public:
 			}
 			inputBuf_.append(rawRecvdata.data_, rawRecvdata.len_);
 		}
-		return fec_.Input(data, len, &inputBuf_);
+		return fec_.Input(userBuf, len, &inputBuf_);
 	}
 
 
@@ -800,13 +801,13 @@ public:
 private:
 	friend void Fec::Output(Buf*);
 
-	void DoRecv(char* data, int& len, int readableLen)
+	void DoRecv(Buf* userBuf, int& len, int readableLen)
 	{
 		auto dataType = inputBuf_.readInt8();
 		readableLen -= 1;
 		if (dataType == kUnreliable)
 		{
-			memcpy(data, inputBuf_.peek(), readableLen);
+			userBuf->append(inputBuf_.peek(), readableLen);
 			len = readableLen;
 		}
 		else if (dataType == kReliable)
@@ -853,7 +854,7 @@ private:
 					if (result == 0)
 					{
 						Update(true);
-						len = KcpRecv(data); // if err, -1, -2, -3
+						len = KcpRecv(userBuf); // if err, -1, -2, -3
 					}
 					else // if (result < 0)
 						len = result - 3; // ikcp_input err, -4, -5, -6
@@ -924,13 +925,16 @@ private:
 
 	void SetKcpConnectState(ConnectionStateE s) { kcpConnState_ = s; }
 
-	int KcpRecv(char* userBuffer)
+	int KcpRecv(Buf* userBuf)
 	{
 		assert(kcp_);
 		int msgLen = ikcp_peeksize(kcp_);
 		if (msgLen <= 0)
 			return 0;
-		return ikcp_recv(kcp_, userBuffer, msgLen);
+		userBuf->ensureWritableBytes(msgLen);
+		ikcp_recv(kcp_, userBuf->beginWrite(), msgLen);
+		userBuf->hasWritten(msgLen); // cause ret of ikcp_recv() equal to ikcp_peeksize()
+		return msgLen;
 	}
 
 	static int KcpPshOutputFuncRaw(const char* data, int len, IKCPCB* kcp, void* user)

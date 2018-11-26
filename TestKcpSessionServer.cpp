@@ -107,6 +107,7 @@ void handle_udp_msg(int fd)
 {
 	char sndBuf[SND_BUFF_LEN];
 	char rcvBuf[RCV_BUFF_LEN];
+	kcpsess::Buf kcpsessRcvBuf; // cause we don't know how big the recv_data is
 
 	struct sockaddr_in* clientAddr = new struct sockaddr_in;  //clent_addr用于记录发送方的地址信息
 	uint32_t nextRcvIndex = 11;
@@ -134,8 +135,9 @@ void handle_udp_msg(int fd)
 
 	while (1)
 	{
-		memset(rcvBuf, 0, RCV_BUFF_LEN);
-		while (kcpServer.Recv(rcvBuf, len))
+		//memset(rcvBuf, 0, RCV_BUFF_LEN);
+		//while (kcpServer.Recv(rcvBuf, len))
+		while (kcpServer.Recv(&kcpsessRcvBuf, len))
 		{
 			if (len < 0 && !isSimulatingPackageLoss)
 			{
@@ -143,7 +145,9 @@ void handle_udp_msg(int fd)
 			}
 			else if (len > 0)
 			{
-				index = *(uint32_t*)(rcvBuf + 0);
+				//index = *(uint32_t*)(rcvBuf + 0);
+				index = *(uint32_t*)(kcpsessRcvBuf.peek() + 0);
+				kcpsessRcvBuf.retrieveAll();
 
 				if (index <= testPassIndex)
 					printf("reliable msg from client: %d\n", (int)index);

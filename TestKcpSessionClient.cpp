@@ -86,6 +86,7 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 {
 	char sndBuf[SND_BUFF_LEN];
 	char rcvBuf[RCV_BUFF_LEN];
+	kcpsess::Buf kcpsessRcvBuf; // cause we don't know how big the recv_data is
 
 	struct sockaddr_in from;
 	int len = 0;
@@ -96,7 +97,6 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 		std::bind(udp_output, std::placeholders::_1, std::placeholders::_2, fd, dst),
 		std::bind(udp_input, rcvBuf, RCV_BUFF_LEN, fd, std::ref(from)),
 		std::bind(iclock));
-
 
 #if TEST_APPLICATION_LEVEL_CONGESTION_CONTROL
 
@@ -131,8 +131,9 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 			}
 		}
 
-		memset(rcvBuf, 0, RCV_BUFF_LEN);
-		while (kcpClient.Recv(rcvBuf, len))
+		//memset(rcvBuf, 0, RCV_BUFF_LEN);
+		//while (kcpClient.Recv(rcvBuf, len))
+		while (kcpClient.Recv(&kcpsessRcvBuf, len))
 		{
 			if (len < 0)
 			{
@@ -140,7 +141,9 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 			}
 			else if (len > 0)
 			{
-				uint32_t srvRcvMaxIndex = *(uint32_t*)(rcvBuf + 0);
+				//uint32_t srvRcvMaxIndex = *(uint32_t*)(rcvBuf + 0);
+				uint32_t srvRcvMaxIndex = *(uint32_t*)(kcpsessRcvBuf.peek() + 0);
+				kcpsessRcvBuf.retrieveAll();
 				printf("unreliable msg from server: have recieved the max index = %d\n", (int)srvRcvMaxIndex);
 				if (srvRcvMaxIndex >= testPassIndex)
 				{
