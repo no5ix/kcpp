@@ -579,7 +579,7 @@ public:
 	int Output(Buf* oBuf)
 	{
 		size_t curLen = oBuf->readableBytes();
-		int frgCnt = 0;
+		size_t frgCnt = 0;
 		if (curLen <= kMaxSeparatePktDataSize)
 			frgCnt = 1;
 		else
@@ -591,8 +591,8 @@ public:
 			return -1;
 		}
 
-		int curSize = 0;
-		for (int i = 0; i < frgCnt; ++i)
+		size_t curSize = 0;
+		for (size_t i = 0; i < frgCnt; ++i)
 		{
 			curSize = curLen > kMaxSeparatePktDataSize ? kMaxSeparatePktDataSize : curLen;
 			oBuf->prependInt16(static_cast<int16_t>(curSize));
@@ -614,7 +614,7 @@ public:
 			{
 				outputQueue_.pop_front();
 				i = -1;
-				userOutputFunc_(oBuf->peek(), oBuf->readableBytes());
+				userOutputFunc_(oBuf->peek(), static_cast<int>(oBuf->readableBytes()));
 				oBuf->retrieveAll();
 				if (outputQueue_.size() < kRedundancyCnt_)
 					break;
@@ -622,7 +622,7 @@ public:
 			else if (i == outputQueue_.size() - 1)
 			{
 				assert(outputQueue_.size() <= 2);
-				userOutputFunc_(oBuf->peek(), oBuf->readableBytes());
+				userOutputFunc_(oBuf->peek(), static_cast<int>(oBuf->readableBytes()));
 				oBuf->retrieveAll();
 			}
 		}
@@ -658,11 +658,11 @@ public:
 				{
 					if (inputFrgMap_.find(rcvSn - 1) != inputFrgMap_.end())
 					{
-						size_t sumDataLen = iBuf->readInt16();
+						int sumDataLen = iBuf->readInt16();
 						for (int sn = rcvSn - 1; sn >= rcvSn - rcvFrgCnt + 1; --sn)
 						{
 							iBuf->prepend(inputFrgMap_[sn]);
-							sumDataLen += inputFrgMap_[sn].size();
+							sumDataLen += static_cast<int>(inputFrgMap_[sn].size());
 						}
 						rcvFunc_(userBuf, len, sumDataLen);
 					}
@@ -805,6 +805,8 @@ public:
 
 		if (dataType == kUnreliable)
 		{
+			if (!fecEnable_)
+				assert(len <= 1460 - 1);
 			outputBuf_.appendInt8(kUnreliable);
 			outputBuf_.append(data, len);
 			int error = OutputAfterCheckingFec();
@@ -825,7 +827,7 @@ public:
 				while (sndQueueBeforeConned_.size() > 0)
 				{
 					std::string msg = sndQueueBeforeConned_.front();
-					int sendRet = ikcp_send(kcp_, msg.c_str(), msg.size());
+					int sendRet = ikcp_send(kcp_, msg.c_str(), static_cast<int>(msg.size()));
 					if (sendRet < 0)
 						return sendRet; // ikcp_send err
 					else
@@ -870,6 +872,7 @@ public:
 			}
 			inputBuf_.append(rawRecvdata.data_, rawRecvdata.len_);
 			DoRecv(userBuf, len, rawRecvdata.len_);
+			return true;
 		}
 	}
 
@@ -1048,7 +1051,7 @@ private:
 		if (!fecEnable_)
 		{
 			assert(this->userOutputFunc_ != nullptr);
-			userOutputFunc_(outputBuf_.peek(), outputBuf_.readableBytes());
+			userOutputFunc_(outputBuf_.peek(), static_cast<int>(outputBuf_.readableBytes()));
 			outputBuf_.retrieveAll();
 			return 0;
 		}
