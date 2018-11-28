@@ -43,6 +43,7 @@ KcpSession myKcpSess(
     std::bind(timer));
 
 while (!isGameOver)
+    myKcpSess.Update()
 
     while (myKcpSess.Recv(data, len))
         if (len > 0)
@@ -55,7 +56,6 @@ while (!isGameOver)
         else
             Game.HandleCanNotSendForNow()
 
-    myKcpSess.Update()
     Game.Logic()
     Game.Render()
 ```

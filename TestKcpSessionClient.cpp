@@ -118,6 +118,7 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 
 #endif // TEST_APPLICATION_LEVEL_CONGESTION_CONTROL
 
+		kcpClient.Update();
 		if (kcpClient.CheckCanSend())
 		{
 			memset(sndBuf, 0, SND_BUFF_LEN);
@@ -153,7 +154,6 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 			}
 		}
 
-		kcpClient.Update();
 	}
 }
 

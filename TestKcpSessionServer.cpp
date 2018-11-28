@@ -136,6 +136,7 @@ void handle_udp_msg(int fd)
 	{
 		//memset(rcvBuf, 0, RCV_BUFF_LEN);
 		//while (kcpServer.Recv(rcvBuf, len))
+		kcpServer.Update();
 		while (kcpServer.Recv(&kcpsessRcvBuf, len))
 		{
 			if (len < 0 && !isSimulatingPackageLoss)
@@ -154,10 +155,10 @@ void handle_udp_msg(int fd)
 				if (index == testPassIndex)
 					printf("test passes, yay! \n please close me ...\n");
 
-				if (kcpServer.IsKcpConnected() && index != nextRcvIndex)
+				if (kcpServer.IsKcpsessConnected() && index != nextRcvIndex)
 				{
 					// 如果收到的包不连续
-					printf("ERROR index != nextRcvIndex : %d != %d, kcpServer.IsKcpConnected() = %d\n", (int)index, (int)nextRcvIndex, (kcpServer.IsKcpConnected() ? 1 : 0));
+					printf("ERROR index != nextRcvIndex : %d != %d, kcpServer.IsKcpConnected() = %d\n", (int)index, (int)nextRcvIndex, (kcpServer.IsKcpsessConnected() ? 1 : 0));
 					return;
 				}
 				++nextRcvIndex;
@@ -172,7 +173,6 @@ void handle_udp_msg(int fd)
 				}
 			}
 		}
-		kcpServer.Update();
 	}
 }
 

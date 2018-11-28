@@ -740,7 +740,7 @@ public:
 public:
 	enum ConnectionStateE { kDisconnected, kConnecting, kConnected, kDisconnecting, kResetting };
 	enum RoleTypeE { kSrv, kCli };
-	enum TransmitModeE { kUnreliable = 88, kReliable };
+	enum TransmitModeE { kUnreliable = 88, kReliable, kHeartbeat };
 	enum PktTypeE { kSyn = 66, kAck, kPsh, kFin, kRst };
 
 	typedef std::function<InputData()> InputFunction;
@@ -751,10 +751,12 @@ public:
 		const OutputFunction& outputFunc,
 		const InputFunction& inputFunc,
 		const CurrentTimestampCallBack& currentTimestampCb,
+		IUINT32 timeoutMs = 888,
 		bool fecEnable = true)
 		:
 		role_(role),
 		conv_(0),
+		timeoutMs_(timeoutMs),
 		userOutputFunc_(outputFunc),
 		userInputFunc_(inputFunc),
 		curTsCb_(currentTimestampCb),
@@ -764,6 +766,7 @@ public:
 		fec_(outputFunc, std::bind(&KcpSession::DoRecv, this, std::placeholders::_1,
 			std::placeholders::_2, std::placeholders::_3)),
 		nextUpdateTs_(0),
+		lastRcvDataTs_(curTsCb_()),
 		sndWnd_(128),
 		rcvWnd_(128),
 		maxWaitSndCount_(2 * sndWnd_),
@@ -777,14 +780,25 @@ public:
 	{}
 
 	// for Application-level Congestion Control
-	bool CheckCanSend() const { return kcp_ ? ikcp_waitsnd(kcp_) < maxWaitSndCount_ : true; }
+	bool CheckCanSend() const
+	{ 
+		return (kcp_ ? ikcp_waitsnd(kcp_) < maxWaitSndCount_ : true) 
+			&& (static_cast<int>(sndQueueBeforeConned_.size()) < maxWaitSndCount_);
+	}
 
 	// update then return next update timestamp
 	IUINT32 Update(bool mustUpdateFlag = false)
 	{
+		CheckTimeout();
 		auto curTimestamp = curTsCb_();
-		if (kcp_)
+		if (IsClient() && !IsKcpsessConnected())
+			SendSyn();
+
+		if (kcp_ && IsKcpsessConnected())
 		{
+			if (IsClient() && ikcp_waitsnd(kcp_) == 0)
+				SendHeartbeat();
+
 			if (curTimestamp >= nextUpdateTs_ || mustUpdateFlag)
 			{
 				ikcp_update(kcp_, curTimestamp);
@@ -799,6 +813,7 @@ public:
 	// returns below zero for error
 	int Send(const void* data, int len, TransmitModeE dataType = kReliable)
 	{
+		CheckTimeout();
 		assert(data != nullptr);
 		assert(len > 0);
 		assert(dataType == kReliable || dataType == kUnreliable);
@@ -812,17 +827,17 @@ public:
 			int error = OutputAfterCheckingFec();
 			if (error)
 				return error;
-			if (!IsKcpConnected() && role_ == kCli)
+			if (!IsKcpsessConnected() && IsClient())
 				SendSyn();
 		}
 		else if (dataType == kReliable)
 		{
-			if (!IsKcpConnected() && role_ == kCli)
+			if (!IsKcpsessConnected() && IsClient())
 			{
 				SendSyn();
 				sndQueueBeforeConned_.push(std::string(static_cast<const char*>(data), len));
 			}
-			else if (IsKcpConnected())
+			else if (IsKcpsessConnected())
 			{
 				while (sndQueueBeforeConned_.size() > 0)
 				{
@@ -877,218 +892,259 @@ public:
 	}
 
 
-	public:
-		ikcpcb* GetKcp() const { return kcp_; }
+public:
 
-		RoleTypeE GetRoleType const{ return role_; }
+	bool IsServer() const { return role_ == kSrv; }
+	bool IsClient() const { return role_ == kCli; }
 
-		bool IsKcpConnected() const { return kcpConnState_ == kConnected; }
+	ikcpcb* GetKcp() const { return kcp_; }
 
-		// should set before Send()
-		void SetKcpConfig(const int sndWnd = 128, const int rcvWnd = 128, const int maxWaitSndCount = 512,
-			const int nodelay = 1, const int interval = 10, const int resend = 1, const int nc = 1,
-			const int streamMode = 0, const int mtu = 300, const int rx_minrto = 10)
+	RoleTypeE GetRoleType() const { return role_; }
+
+	bool IsKcpsessConnected() const { return kcpConnState_ == kConnected; }
+
+	// should set before Send()
+	void SetKcpConfig(const int sndWnd = 128, const int rcvWnd = 128, const int maxWaitSndCount = 512,
+		const int nodelay = 1, const int interval = 10, const int resend = 1, const int nc = 1,
+		const int streamMode = 0, const int mtu = 300, const int rx_minrto = 10)
+	{
+		assert(maxWaitSndCount > sndWnd);
+		sndWnd_ = sndWnd; rcvWnd_ = rcvWnd; maxWaitSndCount_ = maxWaitSndCount;
+		nodelay_ = nodelay; interval_ = interval; resend_ = resend; nc_ = nc;
+		streamMode_ = streamMode; mtu_ = mtu; rx_minrto_ = rx_minrto;
+	}
+
+	bool CheckTimeout()
+	{
+		bool isTimeout = (curTsCb_() - lastRcvDataTs_) >= timeoutMs_;
+		if (isTimeout)
+			SetKcpConnectState(kDisconnected);
+		return isTimeout;
+	}
+
+	~KcpSession() { if (kcp_) ikcp_release(kcp_); }
+
+
+private:
+	friend int Fec::Output(Buf*);
+
+	void DoRecv(Buf* userBuf, int& len, int readableLen)
+	{
+		CheckTimeout();
+		auto dataType = inputBuf_.readInt8();
+		readableLen -= 1;
+		if (dataType == kUnreliable)
 		{
-			assert(maxWaitSndCount > sndWnd);
-			sndWnd_ = sndWnd; rcvWnd_ = rcvWnd; maxWaitSndCount_ = maxWaitSndCount;
-			nodelay_ = nodelay; interval_ = interval; resend_ = resend; nc_ = nc;
-			streamMode_ = streamMode; mtu_ = mtu; rx_minrto_ = rx_minrto;
+			userBuf->append(inputBuf_.peek(), readableLen);
+			len = readableLen;
 		}
-
-		~KcpSession() { if (kcp_) ikcp_release(kcp_); }
-
-
-	private:
-		friend int Fec::Output(Buf*);
-
-		void DoRecv(Buf* userBuf, int& len, int readableLen)
+		else if (dataType == kReliable)
 		{
-			auto dataType = inputBuf_.readInt8();
+			auto pktType = inputBuf_.readInt8();
 			readableLen -= 1;
-			if (dataType == kUnreliable)
+			if (pktType == kSyn)
 			{
-				userBuf->append(inputBuf_.peek(), readableLen);
-				len = readableLen;
-			}
-			else if (dataType == kReliable)
-			{
-				auto pktType = inputBuf_.readInt8();
-				readableLen -= 1;
-				if (pktType == kSyn)
+				assert(IsServer());
+				if (!IsKcpsessConnected())
 				{
-					assert(role_ == kSrv);
-					if (!IsKcpConnected())
-					{
-						SetKcpConnectState(kConnected);
-						InitKcp(GetNewConv());
-					}
-					else
-					{
-						InitKcp(conv_, true);
-					}
-					SendAckAndConv();
-					len = 0;
-				}
-				else if (pktType == kAck)
-				{
-					if (!IsKcpConnected())
-					{
-						SetKcpConnectState(kConnected);
-						InitKcp(inputBuf_.readInt32());
-						readableLen -= 4;
-					}
-					len = 0;
-				}
-				else if (pktType == kRst)
-				{
-					SetKcpConnectState(kResetting);
-					assert(role_ == kCli);
-					SendSyn();
-					len = 0;
-				}
-				else if (pktType == kPsh)
-				{
-					if (IsKcpConnected())
-					{
-						int result = ikcp_input(kcp_, inputBuf_.peek(), readableLen);
-						if (result == 0)
-						{
-							Update(true);
-							len = KcpRecv(userBuf); // if err, -1, -2, -3
-						}
-						else // if (result < 0)
-							len = result - 3; // ikcp_input err, -4, -5, -6
-					}
-					else  // pktType == kPsh, but kcp not connected
-					{
-						if (role_ == kSrv)
-							SendRst();
-						len = 0;
-					}
+					SetKcpConnectState(kConnected);
+					InitKcp(GetNewConv());
 				}
 				else
 				{
-					len = -8; // pktType err
+					InitKcp(conv_, true);
+				}
+				SendAckAndConv();
+				len = 0;
+			}
+			else if (pktType == kAck)
+			{
+				if (!IsKcpsessConnected())
+				{
+					SetKcpConnectState(kConnected);
+					InitKcp(inputBuf_.readInt32());
+					readableLen -= 4;
+				}
+				len = 0;
+			}
+			else if (pktType == kRst)
+			{
+				assert(IsClient());
+				if (IsKcpsessConnected() || kcpConnState_ == kConnecting)
+				{
+					SetKcpConnectState(kResetting);
+					SendSyn();
+				}
+				len = 0;
+			}
+			else if (pktType == kPsh)
+			{
+				if (IsKcpsessConnected())
+				{
+					int result = ikcp_input(kcp_, inputBuf_.peek(), readableLen);
+					if (result == 0)
+					{
+						Update(true);
+						len = KcpRecv(userBuf); // if err, -1, -2, -3
+					}
+					else // if (result < 0)
+						len = result - 3; // ikcp_input err, -4, -5, -6
+				}
+				else  // pktType == kPsh, but kcp not connected
+				{
+					if (IsServer())
+						SendRst();
+					len = 0;
 				}
 			}
 			else
 			{
-				len = -9; // dataType err
+				len = -8; // pktType err
 			}
-			inputBuf_.retrieve(readableLen);
 		}
-
-		void SendRst()
+		else if (dataType == kHeartbeat)
 		{
-			assert(role_ == kSrv);
-			outputBuf_.appendInt8(kReliable);
-			outputBuf_.appendInt8(kRst);
-			OutputAfterCheckingFec();
-		}
-
-		void SendSyn()
-		{
-			assert(role_ == kCli);
-			outputBuf_.appendInt8(kReliable);
-			outputBuf_.appendInt8(kSyn);
-			OutputAfterCheckingFec();
-		}
-
-		void SendAckAndConv()
-		{
-			assert(role_ == kSrv);
-			outputBuf_.appendInt8(kReliable);
-			outputBuf_.appendInt8(kAck);
-			outputBuf_.appendInt32(conv_);
-			OutputAfterCheckingFec();
-		}
-
-		void InitKcp(const IUINT32 conv, bool reinit = false)
-		{
-			if (reinit) if (kcp_) ikcp_release(kcp_);
-			conv_ = conv;
-			kcp_ = ikcp_create(conv, this);
-			ikcp_wndsize(kcp_, sndWnd_, rcvWnd_);
-			ikcp_nodelay(kcp_, nodelay_, interval_, resend_, nc_);
-			ikcp_setmtu(kcp_, mtu_);
-			kcp_->stream = streamMode_;
-			kcp_->rx_minrto = rx_minrto_;
-			kcp_->output = KcpSession::KcpPshOutputFuncRaw;
-		}
-
-		IUINT32 GetNewConv()
-		{
-			assert(role_ == kSrv);
-			static IUINT32 newConv = 666;
-			return newConv++;
-		}
-
-		void SetKcpConnectState(ConnectionStateE s) { kcpConnState_ = s; }
-
-		int KcpRecv(Buf* userBuf)
-		{
-			assert(kcp_);
-			int msgLen = ikcp_peeksize(kcp_);
-			if (msgLen <= 0)
-				return 0;
-			userBuf->ensureWritableBytes(msgLen);
-			ikcp_recv(kcp_, userBuf->beginWrite(), msgLen);
-			userBuf->hasWritten(msgLen); // cause ret of ikcp_recv() equal to ikcp_peeksize()
-			return msgLen;
-		}
-
-		static int KcpPshOutputFuncRaw(const char* data, int len, IKCPCB* kcp, void* user)
-		{
-			(void)kcp;
-			auto thisPtr = reinterpret_cast<KcpSession *>(user);
-
-			thisPtr->outputBuf_.appendInt8(kReliable);
-			thisPtr->outputBuf_.appendInt8(kPsh);
-			thisPtr->outputBuf_.append(data, len);
-			return thisPtr->OutputAfterCheckingFec();
-		}
-
-		int OutputAfterCheckingFec()
-		{
-			if (!fecEnable_)
+			if (IsServer())
 			{
-				assert(this->userOutputFunc_ != nullptr);
-				userOutputFunc_(outputBuf_.peek(), static_cast<int>(outputBuf_.readableBytes()));
-				outputBuf_.retrieveAll();
-				return 0;
+				if (!IsKcpsessConnected())
+					SendRst();
+				else
+					SendHeartbeat();
 			}
-			else
-				return fec_.Output(&outputBuf_);
+			len = 0;
+		}
+		else
+		{
+			len = -9; // dataType err
 		}
 
-	private:
-		ikcpcb* kcp_;
-		InputFunction userInputFunc_;
-		OutputFunction userOutputFunc_;
-		ConnectionStateE kcpConnState_;
-		Buf outputBuf_;
-		Buf inputBuf_;
-		CurrentTimestampCallBack curTsCb_;
-		IUINT32 conv_;
-		RoleTypeE role_;
-		std::queue<std::string> sndQueueBeforeConned_;
-		bool fecEnable_;
-		Fec fec_;
-		IUINT32 nextUpdateTs_;
+		UpdateLastRcvDataTs();
+		inputBuf_.retrieve(readableLen);
+	}
 
-	private:
-		// kcp config...
-		int sndWnd_;
-		int rcvWnd_;
-		int maxWaitSndCount_;
-		int nodelay_;
-		int interval_;
-		int resend_;
-		int nc_;
-		int streamMode_;
-		int mtu_;
-		int rx_minrto_;
-	};
-	typedef std::shared_ptr<KcpSession> KcpSessionPtr;
+	void UpdateLastRcvDataTs() { lastRcvDataTs_ = curTsCb_(); }
+
+	void SendHeartbeat()
+	{
+		//assert(IsClient());
+		//outputBuf_.appendInt8(kReliable);
+		outputBuf_.appendInt8(kHeartbeat);
+		OutputAfterCheckingFec();
+	}
+
+	void SendRst()
+	{
+		assert(IsServer());
+		outputBuf_.appendInt8(kReliable);
+		outputBuf_.appendInt8(kRst);
+		OutputAfterCheckingFec();
+	}
+
+	void SendSyn()
+	{
+		assert(IsClient());
+		outputBuf_.appendInt8(kReliable);
+		outputBuf_.appendInt8(kSyn);
+		OutputAfterCheckingFec();
+	}
+
+	void SendAckAndConv()
+	{
+		assert(IsServer());
+		outputBuf_.appendInt8(kReliable);
+		outputBuf_.appendInt8(kAck);
+		outputBuf_.appendInt32(conv_);
+		OutputAfterCheckingFec();
+	}
+
+	void InitKcp(const IUINT32 conv, bool reinit = false)
+	{
+		if (reinit) if (kcp_) ikcp_release(kcp_);
+		conv_ = conv;
+		kcp_ = ikcp_create(conv, this);
+		ikcp_wndsize(kcp_, sndWnd_, rcvWnd_);
+		ikcp_nodelay(kcp_, nodelay_, interval_, resend_, nc_);
+		ikcp_setmtu(kcp_, mtu_);
+		kcp_->stream = streamMode_;
+		kcp_->rx_minrto = rx_minrto_;
+		kcp_->output = KcpSession::KcpPshOutputFuncRaw;
+	}
+
+	IUINT32 GetNewConv()
+	{
+		assert(IsServer());
+		static IUINT32 newConv = 666;
+		return newConv++;
+	}
+
+	void SetKcpConnectState(ConnectionStateE s) { kcpConnState_ = s; }
+
+	int KcpRecv(Buf* userBuf)
+	{
+		assert(kcp_);
+		int msgLen = ikcp_peeksize(kcp_);
+		if (msgLen <= 0)
+			return 0;
+		userBuf->ensureWritableBytes(msgLen);
+		ikcp_recv(kcp_, userBuf->beginWrite(), msgLen);
+		userBuf->hasWritten(msgLen); // cause ret of ikcp_recv() equal to ikcp_peeksize()
+		return msgLen;
+	}
+
+	static int KcpPshOutputFuncRaw(const char* data, int len, IKCPCB* kcp, void* user)
+	{
+		(void)kcp;
+		auto thisPtr = reinterpret_cast<KcpSession *>(user);
+
+		thisPtr->outputBuf_.appendInt8(kReliable);
+		thisPtr->outputBuf_.appendInt8(kPsh);
+		thisPtr->outputBuf_.append(data, len);
+		return thisPtr->OutputAfterCheckingFec();
+	}
+
+	int OutputAfterCheckingFec()
+	{
+		if (!fecEnable_)
+		{
+			assert(this->userOutputFunc_ != nullptr);
+			userOutputFunc_(outputBuf_.peek(), static_cast<int>(outputBuf_.readableBytes()));
+			outputBuf_.retrieveAll();
+			return 0;
+		}
+		else
+			return fec_.Output(&outputBuf_);
+	}
+
+private:
+	ikcpcb* kcp_;
+	InputFunction userInputFunc_;
+	OutputFunction userOutputFunc_;
+	ConnectionStateE kcpConnState_;
+	Buf outputBuf_;
+	Buf inputBuf_;
+	CurrentTimestampCallBack curTsCb_;
+	IUINT32 conv_;
+	IUINT32 timeoutMs_;
+	RoleTypeE role_;
+	std::queue<std::string> sndQueueBeforeConned_;
+	bool fecEnable_;
+	Fec fec_;
+	IUINT32 nextUpdateTs_;
+	IUINT32 lastRcvDataTs_;
+
+private:
+	// kcp config...
+	int sndWnd_;
+	int rcvWnd_;
+	int maxWaitSndCount_;
+	int nodelay_;
+	int interval_;
+	int resend_;
+	int nc_;
+	int streamMode_;
+	int mtu_;
+	int rx_minrto_;
+};
+typedef std::shared_ptr<KcpSession> KcpSessionPtr;
 
 }
