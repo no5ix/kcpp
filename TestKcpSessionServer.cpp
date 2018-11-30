@@ -84,7 +84,7 @@ void udp_output(const void *buf, int len, int fd, struct sockaddr_in* dst)
 }
 
 bool isSimulatingPackageLoss = false;
-KcpSession::InputData udp_input(char* buf, int len, int fd, struct sockaddr_in* from)
+kcpsess::UserInputData udp_input(char* buf, int len, int fd, struct sockaddr_in* from)
 {
 	socklen_t fromAddrLen = sizeof(*from);
 	int recvLen = ::recvfrom(fd, buf, len, 0,
@@ -99,7 +99,7 @@ KcpSession::InputData udp_input(char* buf, int len, int fd, struct sockaddr_in* 
 			recvLen = 0;
 		}
 	}
-	return KcpSession::InputData(buf, recvLen);
+	return kcpsess::UserInputData(buf, recvLen);
 }
 
 void handle_udp_msg(int fd)
@@ -142,6 +142,7 @@ void handle_udp_msg(int fd)
 			if (len < 0 && !isSimulatingPackageLoss)
 			{
 				printf("kcpSession Recv failed, Recv() = %d \n", len);
+				return;
 			}
 			else if (len > 0)
 			{
@@ -155,17 +156,17 @@ void handle_udp_msg(int fd)
 				if (index == testPassIndex)
 					printf("test passes, yay! \n please close me ...\n");
 
-				if (kcpServer.IsKcpsessConnected() && index != nextRcvIndex)
+				if (kcpServer.IsConnected() && index != nextRcvIndex)
 				{
 					// 如果收到的包不连续
-					printf("ERROR index != nextRcvIndex : %d != %d, kcpServer.IsKcpConnected() = %d\n", (int)index, (int)nextRcvIndex, (kcpServer.IsKcpsessConnected() ? 1 : 0));
+					printf("ERROR index != nextRcvIndex : %d != %d, kcpServer.IsKcpConnected() = %d\n", (int)index, (int)nextRcvIndex, (kcpServer.IsConnected() ? 1 : 0));
 					return;
 				}
 				++nextRcvIndex;
 
 				memset(sndBuf, 0, SND_BUFF_LEN);
 				((uint32_t*)sndBuf)[0] = nextRcvIndex - 1;
-				int result = kcpServer.Send(sndBuf, SND_BUFF_LEN, KcpSession::TransmitModeE::kUnreliable);
+				int result = kcpServer.Send(sndBuf, SND_BUFF_LEN, kcpsess::TransmitModeE::kUnreliable);
 				if (result < 0)
 				{
 					printf("kcpSession Send failed\n");

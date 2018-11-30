@@ -573,7 +573,6 @@ void ikcp_allocator(void* (*new_malloc)(size_t), void (*new_free)(void*));
 // read conv
 IUINT32 ikcp_getconv(const void *ptr);
 
-
 #ifdef __cplusplus
 }
 #endif

@@ -2,14 +2,12 @@
 
 #include <functional>
 #include <memory>
-#include <queue>
 #include <deque>
-#include <map>
+#include <unordered_map>
 #include <string>
 #include <algorithm>
 #include <vector>
 #include <assert.h>
-#include <string>
 #include "ikcp.h"
 
 
@@ -548,31 +546,40 @@ private:
 	std::vector<char> buffer_;
 	size_t readerIndex_;
 	size_t writerIndex_;
-
 	static const char kCRLF[];
 };
 
 
-typedef std::function<void(const void* pendingSendData, int pendingSendDataLen)> OutputFunction;
+struct UserInputData
+{
+	UserInputData(char *data = nullptr, const int len = 0)
+	{
+		this->len_ = len;
+		if (len > 0)
+			this->data_ = data;
+		else
+			this->data_ = nullptr;
+	}
+	char* data_;
+	int len_;
+};
+
+
+class KcpSession;
+typedef std::shared_ptr<KcpSession> KcpSessionPtr;
+typedef std::function<void(const void* pendingSendData, int pendingSendDataLen)> UserOutputFunction;
+typedef std::function<UserInputData()> UserInputFunction;
+typedef std::function<int()> CurrentTimestampMsCallBack;
+typedef std::function<void(std::deque<std::string>* pendingSendDataDeque)> KcpSessionConnectionCallback;
+enum TransmitModeE { kUnreliable = 88, kReliable };
+
 
 class Fec
 {
 public:
-	static const size_t kMaxFrgCnt = 128;
-	static const size_t kRedundancyCnt_ = 3;
-	//static const size_t kMaxSeparatePktSize = 1460 / kRedundancyCnt_;
-
-	static const size_t kDataLen = sizeof(int16_t);
-	static const size_t kSnLen = sizeof(int32_t);
-	static const size_t kFrgLen = sizeof(int8_t);
-	static const size_t kFrgCntLen = sizeof(int8_t);
-	static const size_t kHeaderLen = kDataLen + kSnLen + kFrgLen + kFrgCntLen;
-	static const size_t kMaxSeparatePktDataSize = (1460 - (kRedundancyCnt_ * kHeaderLen)) / kRedundancyCnt_;
-
 	typedef std::function<void(Buf*, int&, int)> RecvFuncion;
-public:
-	Fec(const OutputFunction& outputFunc, const RecvFuncion& rcvFunc)
-		: userOutputFunc_(outputFunc), rcvFunc_(rcvFunc),
+	Fec(const UserOutputFunction& userOutputFunc, const RecvFuncion& rcvFunc)
+		: userOutputFunc_(userOutputFunc), rcvFunc_(rcvFunc),
 		nextSndSn_(0), nextRcvSn_(0), isFinishedThisRound_(true)
 	{}
 
@@ -585,7 +592,7 @@ public:
 		else
 			frgCnt = (curLen + kMaxSeparatePktDataSize - 1) / kMaxSeparatePktDataSize;
 
-		if ((IUINT32)frgCnt >= kMaxFrgCnt)
+		if (frgCnt >= kMaxFrgCnt)
 		{
 			oBuf->retrieveAll();
 			return -1;
@@ -599,29 +606,29 @@ public:
 			oBuf->prependInt8(static_cast<int8_t>(frgCnt - i - 1));
 			oBuf->prependInt8(static_cast<int8_t>(frgCnt));
 			oBuf->prependInt32(nextSndSn_++);
-			outputQueue_.push_back(std::string(oBuf->peek(), kHeaderLen + curSize));
+			outputPktDeque_.emplace_back(std::string(oBuf->peek(), kHeaderLen + curSize));
 			oBuf->retrieve(kHeaderLen + curSize);
 			curLen -= curSize;
 		}
 		assert(curLen == 0);
 
-		for (size_t i = 0; i < outputQueue_.size(); ++i)
+		for (size_t i = 0; i < outputPktDeque_.size(); ++i)
 		{
 			assert(this->userOutputFunc_ != nullptr);
-			oBuf->append(*(outputQueue_.begin() + i));
+			oBuf->append(*(outputPktDeque_.begin() + i));
 
 			if (i == kRedundancyCnt_ - 1)
 			{
-				outputQueue_.pop_front();
+				outputPktDeque_.pop_front();
 				i = -1;
 				userOutputFunc_(oBuf->peek(), static_cast<int>(oBuf->readableBytes()));
 				oBuf->retrieveAll();
-				if (outputQueue_.size() < kRedundancyCnt_)
+				if (outputPktDeque_.size() < kRedundancyCnt_)
 					break;
 			}
-			else if (i == outputQueue_.size() - 1)
+			else if (i == outputPktDeque_.size() - 1)
 			{
-				assert(outputQueue_.size() <= 2);
+				assert(outputPktDeque_.size() <= 2);
 				userOutputFunc_(oBuf->peek(), static_cast<int>(oBuf->readableBytes()));
 				oBuf->retrieveAll();
 			}
@@ -631,7 +638,7 @@ public:
 
 	bool Input(Buf* userBuf, int& len, Buf* iBuf)
 	{
-		bool hasData = IsThereAnyDataLeft(iBuf);
+		bool hasData = IsAnyDataLeft(iBuf);
 		if (hasData)
 		{
 			auto discardRcvedData = [&]() { iBuf->retrieve(iBuf->readInt16()); len = 0; };
@@ -650,13 +657,18 @@ public:
 						inputFrgMap_.clear();
 
 					if (isHeadFrg || inputFrgMap_.find(rcvSn - 1) != inputFrgMap_.end())
-						inputFrgMap_.emplace(std::make_pair(rcvSn, std::string(iBuf->peek() + kDataLen, iBuf->peekInt16())));
+						inputFrgMap_.emplace(std::make_pair(
+							rcvSn, std::string(iBuf->peek() + kDataLen, iBuf->peekInt16())));
 
 					discardRcvedData();
 				}
 				else if (rcvFrg == 0)
 				{
-					if (inputFrgMap_.find(rcvSn - 1) != inputFrgMap_.end())
+					if (rcvFrgCnt == 1)
+					{
+						rcvFunc_(userBuf, len, iBuf->readInt16());
+					}
+					else if (inputFrgMap_.find(rcvSn - 1) != inputFrgMap_.end())
 					{
 						int sumDataLen = iBuf->readInt16();
 						for (int sn = rcvSn - 1; sn >= rcvSn - rcvFrgCnt + 1; --sn)
@@ -666,14 +678,8 @@ public:
 						}
 						rcvFunc_(userBuf, len, sumDataLen);
 					}
-					else if (rcvFrgCnt > 1)
-					{
+					else
 						discardRcvedData();
-					}
-					else if (rcvFrgCnt == 1)
-					{
-						rcvFunc_(userBuf, len, iBuf->readInt16());
-					}
 				}
 			}
 			else if (rcvSn < nextRcvSn_)
@@ -685,88 +691,74 @@ public:
 		{
 			iBuf->retrieveAll();
 			isFinishedThisRound_ = true;
-			len = -1;
+			len = 0;
 		}
 		return hasData;
 	}
 
-	bool IsFinishedThisRound_() const { return isFinishedThisRound_; }
+	bool IsFinishedThisRound() const { return isFinishedThisRound_; }
 
 private:
-	bool IsThereAnyDataLeft(const Buf* buf) const
+	bool IsAnyDataLeft(const Buf* buf) const
 	{
-		if (buf->readableBytes() >= Fec::kSnLen)
+		if (buf->readableBytes() >= kHeaderLen)
 		{
 			int16_t be16 = 0;
-			::memcpy(&be16, buf->peek() + Fec::kSnLen + Fec::kFrgLen + Fec::kFrgCntLen, sizeof be16);
+			::memcpy(&be16, buf->peek() + (kHeaderLen - kDataLen), sizeof be16);
 			const uint16_t dataLen = be16toh(be16);
 
-			if (dataLen > kMaxSeparatePktDataSize)
+			if (dataLen > kMaxSeparatePktDataSize) // FIXME: 这个判断不支持动态冗余
 				return false;
 
-			return buf->readableBytes() >= (dataLen + Fec::kHeaderLen);
+			return buf->readableBytes() >= (dataLen + kHeaderLen);
 		}
 		return false;
 	}
 
 private:
+	static const size_t kMaxFrgCnt = 128;
+	static const size_t kRedundancyCnt_ = 3;
+
+	static const size_t kSnLen = sizeof(int32_t);
+	static const size_t kFrgCntLen = sizeof(int8_t);
+	static const size_t kFrgLen = sizeof(int8_t);
+	static const size_t kDataLen = sizeof(int16_t);
+	static const size_t kHeaderLen = kSnLen + kFrgCntLen + kFrgLen + kDataLen;
+	static const size_t kMaxSeparatePktDataSize = (1460 - (kRedundancyCnt_ * kHeaderLen)) / kRedundancyCnt_;
+
 	RecvFuncion rcvFunc_;
-	OutputFunction userOutputFunc_;
-	std::deque<std::string> outputQueue_;
-	std::map<int, std::string> inputFrgMap_;
+	UserOutputFunction userOutputFunc_;
+	std::deque<std::string> outputPktDeque_;
+	std::unordered_map<int, std::string> inputFrgMap_;
 	int32_t nextSndSn_;
 	int32_t nextRcvSn_;
 	bool isFinishedThisRound_;
 };
 
+
 class KcpSession
 {
 public:
-	struct InputData
-	{
-		InputData(char *data = nullptr, const int len = 0)
-		{
-			this->len_ = len;
-			if (len > 0)
-				this->data_ = data;
-			else
-				this->data_ = nullptr;
-		}
-
-		char* data_;
-		int len_;
-	};
-
-public:
-	enum ConnectionStateE { kDisconnected, kConnecting, kConnected, kDisconnecting, kResetting };
+	enum ConnectionStateE { kConnecting, kConnected, kResetting, kReset };
 	enum RoleTypeE { kSrv, kCli };
-	enum TransmitModeE { kUnreliable = 88, kReliable, kHeartbeat };
-	enum PktTypeE { kSyn = 66, kAck, kPsh, kFin, kRst };
-
-	typedef std::function<InputData()> InputFunction;
-	typedef std::function<IUINT32()> CurrentTimestampCallBack;
+	enum PktTypeE { kSyn = 66, kAck, kPsh, kRst };
 
 public:
 	KcpSession(const RoleTypeE role,
-		const OutputFunction& outputFunc,
-		const InputFunction& inputFunc,
-		const CurrentTimestampCallBack& currentTimestampCb,
-		IUINT32 timeoutMs = 888,
-		bool fecEnable = true)
+		const UserOutputFunction& userOutputFunc,
+		const UserInputFunction& userInputFunc,
+		const CurrentTimestampMsCallBack& currentTimestampMsFunc)
 		:
 		role_(role),
 		conv_(0),
-		timeoutMs_(timeoutMs),
-		userOutputFunc_(outputFunc),
-		userInputFunc_(inputFunc),
-		curTsCb_(currentTimestampCb),
+		userOutputFunc_(userOutputFunc),
+		userInputFunc_(userInputFunc),
+		curTsMsFunc_(currentTimestampMsFunc),
 		kcp_(nullptr),
-		kcpConnState_(kConnecting),
-		fecEnable_(fecEnable),
-		fec_(outputFunc, std::bind(&KcpSession::DoRecv, this, std::placeholders::_1,
+		curConnState_(kConnecting),
+		fec_(userOutputFunc_, std::bind(&KcpSession::DoRecv, this, std::placeholders::_1,
 			std::placeholders::_2, std::placeholders::_3)),
 		nextUpdateTs_(0),
-		lastRcvDataTs_(curTsCb_()),
 		sndWnd_(128),
 		rcvWnd_(128),
 		maxWaitSndCount_(2 * sndWnd_),
@@ -777,131 +769,42 @@ public:
 		streamMode_(0),
 		mtu_(300),
 		rx_minrto_(10)
-	{}
+	{
+		if (IsClient() && !IsConnected())
+			for (int i = 6; i > 0; --i)
+				SendSyn();
+	}
+
+	/// ------ basic APIs --------
 
 	// for Application-level Congestion Control
-	bool CheckCanSend() const
-	{ 
-		return (kcp_ ? ikcp_waitsnd(kcp_) < maxWaitSndCount_ : true) 
-			&& (static_cast<int>(sndQueueBeforeConned_.size()) < maxWaitSndCount_);
-	}
-
-	// update then return next update timestamp
-	IUINT32 Update(bool mustUpdateFlag = false)
-	{
-		CheckTimeout();
-		auto curTimestamp = curTsCb_();
-		if (IsClient() && !IsKcpsessConnected())
-			SendSyn();
-
-		if (kcp_ && IsKcpsessConnected())
-		{
-			if (IsClient() && ikcp_waitsnd(kcp_) == 0)
-				SendHeartbeat();
-
-			if (curTimestamp >= nextUpdateTs_ || mustUpdateFlag)
-			{
-				ikcp_update(kcp_, curTimestamp);
-				nextUpdateTs_ = ikcp_check(kcp_, curTimestamp);
-			}
-			return nextUpdateTs_;
-		}
-		else // not yet connected
-			return curTimestamp + interval_;
-	}
+	bool CheckCanSend() const { return (kcp_ ? ikcp_waitsnd(kcp_) < maxWaitSndCount_ : true)
+			&& (static_cast<int>(pendingSndDataDeque_.size()) < maxWaitSndCount_); }
 
 	// returns below zero for error
-	int Send(const void* data, int len, TransmitModeE dataType = kReliable)
-	{
-		CheckTimeout();
-		assert(data != nullptr);
-		assert(len > 0);
-		assert(dataType == kReliable || dataType == kUnreliable);
+	int Send(const void* data, int len, TransmitModeE transmitMode = kReliable)
+	{ return SendImpl(data, len, transmitMode); }
 
-		if (dataType == kUnreliable)
-		{
-			if (!fecEnable_)
-				assert(len <= 1460 - 1);
-			outputBuf_.appendInt8(kUnreliable);
-			outputBuf_.append(data, len);
-			int error = OutputAfterCheckingFec();
-			if (error)
-				return error;
-			if (!IsKcpsessConnected() && IsClient())
-				SendSyn();
-		}
-		else if (dataType == kReliable)
-		{
-			if (!IsKcpsessConnected() && IsClient())
-			{
-				SendSyn();
-				sndQueueBeforeConned_.push(std::string(static_cast<const char*>(data), len));
-			}
-			else if (IsKcpsessConnected())
-			{
-				while (sndQueueBeforeConned_.size() > 0)
-				{
-					std::string msg = sndQueueBeforeConned_.front();
-					int sendRet = ikcp_send(kcp_, msg.c_str(), static_cast<int>(msg.size()));
-					if (sendRet < 0)
-						return sendRet; // ikcp_send err
-					else
-						Update(true);
-					sndQueueBeforeConned_.pop();
-				}
-
-				int result = ikcp_send(kcp_, static_cast<const char*>(data), len);
-				if (result < 0)
-					return result; // ikcp_send err
-				else
-					Update(true);
-			}
-		}
-		return 0;
-	}
+	// update then returns next update timestamp in ms or returns below zero for error
+	int Update() { return UpdateImpl(); }
 
 	// returns IsAnyDataLeft, len below zero for error
-	bool Recv(Buf* userBuf, int& len)
-	{
-		if (fecEnable_)
-		{
-			if (fec_.IsFinishedThisRound_())
-			{
-				const InputData& rawRecvdata = userInputFunc_();
-				if (rawRecvdata.len_ <= 0)
-				{
-					len = -10;
-					return false;
-				}
-				inputBuf_.append(rawRecvdata.data_, rawRecvdata.len_);
-			}
-			return fec_.Input(userBuf, len, &inputBuf_);
-		}
-		else
-		{
-			const InputData& rawRecvdata = userInputFunc_();
-			if (rawRecvdata.len_ <= 0)
-			{
-				len = -10;
-				return false;
-			}
-			inputBuf_.append(rawRecvdata.data_, rawRecvdata.len_);
-			DoRecv(userBuf, len, rawRecvdata.len_);
-			return true;
-		}
-	}
+	bool Recv(Buf* userBuf, int& len) { return RecvImpl(userBuf, len); }
 
-
-public:
+	/// ------  advanced APIs --------
 
 	bool IsServer() const { return role_ == kSrv; }
 	bool IsClient() const { return role_ == kCli; }
 
 	ikcpcb* GetKcp() const { return kcp_; }
 
-	RoleTypeE GetRoleType() const { return role_; }
+	bool IsConnected() const { return curConnState_ == kConnected; }
 
-	bool IsKcpsessConnected() const { return kcpConnState_ == kConnected; }
+	// callback on :
+	// - client role resetting state(when server role restart, client role will switch to resetting state
+	//				and bring pending send data back to Application-level)
+	// - cli/srv role connected state
+	void setConnectionCallback(KcpSessionConnectionCallback cb) { connectionCallback_ = std::move(cb); }
 
 	// should set before Send()
 	void SetKcpConfig(const int sndWnd = 128, const int rcvWnd = 128, const int maxWaitSndCount = 512,
@@ -914,128 +817,191 @@ public:
 		streamMode_ = streamMode; mtu_ = mtu; rx_minrto_ = rx_minrto;
 	}
 
-	bool CheckTimeout()
-	{
-		bool isTimeout = (curTsCb_() - lastRcvDataTs_) >= timeoutMs_;
-		if (isTimeout)
-			SetKcpConnectState(kDisconnected);
-		return isTimeout;
-	}
-
 	~KcpSession() { if (kcp_) ikcp_release(kcp_); }
 
 
+
 private:
-	friend int Fec::Output(Buf*);
+
+	int UpdateImpl()
+	{
+		if (curConnState_ == kConnecting && IsClient())
+			SendSyn();
+
+		IUINT32 curTimestamp = static_cast<IUINT32>(curTsMsFunc_());
+		if (kcp_ && IsConnected())
+		{
+			int result = FlushSndQueueBeforeConned();
+			if (result < 0)
+				return result;
+			if (curTimestamp >= nextUpdateTs_)
+			{
+				ikcp_update(kcp_, curTimestamp);
+				nextUpdateTs_ = ikcp_check(kcp_, curTimestamp);
+			}
+			return static_cast<int>(nextUpdateTs_);
+		}
+		else // not yet connected
+			return static_cast<int>(curTimestamp) + interval_;
+	}
+
+	int SendImpl(const void* data, int len, TransmitModeE transmitMode = kReliable)
+	{
+		assert(data != nullptr);
+		assert(len > 0);
+		assert(transmitMode == kReliable || transmitMode == kUnreliable);
+
+		if (transmitMode == kUnreliable)
+		{
+			outputBuf_.appendInt8(kUnreliable);
+			outputBuf_.append(data, len);
+			int error = OutputAfterCheckingFec();
+			if (error)
+				return error;
+		}
+		else if (transmitMode == kReliable)
+		{
+			if (!IsConnected() && IsClient())
+			{
+				pendingSndDataDeque_.emplace_back(std::string(static_cast<const char*>(data), len));
+			}
+			else if (IsConnected())
+			{
+				int result = FlushSndQueueBeforeConned();
+				if (result < 0)
+					return result;
+				result = ikcp_send(kcp_, static_cast<const char*>(data), len);
+				if (result < 0)
+					return result; // ikcp_send err
+				else
+					ikcp_update(kcp_, curTsMsFunc_());
+			}
+		}
+		return 0;
+	}
+
+	bool RecvImpl(Buf* userBuf, int& len)
+	{
+		if (fec_.IsFinishedThisRound())
+		{
+			const UserInputData& rawRecvdata = userInputFunc_();
+			if (rawRecvdata.len_ <= 0)
+			{
+				len = -10;
+				return false;
+			}
+			inputBuf_.append(rawRecvdata.data_, rawRecvdata.len_);
+		}
+		return fec_.Input(userBuf, len, &inputBuf_);
+	}
+
+	int FlushSndQueueBeforeConned()
+	{
+		assert(kcp_ && IsConnected());
+		if (pendingSndDataDeque_.size() > 0)
+		{
+			for (auto it = pendingSndDataDeque_.begin(); it != pendingSndDataDeque_.end(); ++it)
+			{
+				int sendRet = ikcp_send(kcp_, it->c_str(), static_cast<int>(it->size()));
+				if (sendRet < 0)
+					return sendRet; // ikcp_send err
+				ikcp_update(kcp_, curTsMsFunc_());
+			}
+			pendingSndDataDeque_.clear();
+		}
+		return 0;
+	}
+
+	void CopyKcpDataToSndQ()
+	{
+		assert(kcp_);
+		IKCPSEG *seg;
+		struct IQUEUEHEAD *p;
+		for (p = kcp_->snd_buf.next; p != &kcp_->snd_buf; p = p->next)
+		{
+			seg = iqueue_entry(p, IKCPSEG, node);
+			pendingSndDataDeque_.emplace_back(std::string(seg->data, seg->len));
+		}
+		for (p = kcp_->snd_queue.next; p != &kcp_->snd_queue; p = p->next)
+		{
+			seg = iqueue_entry(p, IKCPSEG, node);
+			pendingSndDataDeque_.emplace_back(std::string(seg->data, seg->len));
+		}
+	}
 
 	void DoRecv(Buf* userBuf, int& len, int readableLen)
 	{
-		CheckTimeout();
-		auto dataType = inputBuf_.readInt8();
+		int8_t pktType = inputBuf_.readInt8();
 		readableLen -= 1;
-		if (dataType == kUnreliable)
+		if (pktType == static_cast<PktTypeE>(kUnreliable))
 		{
 			userBuf->append(inputBuf_.peek(), readableLen);
 			len = readableLen;
 		}
-		else if (dataType == kReliable)
+		else if (pktType == kSyn)
 		{
-			auto pktType = inputBuf_.readInt8();
-			readableLen -= 1;
-			if (pktType == kSyn)
+			assert(IsServer());
+			if (!IsConnected())
 			{
-				assert(IsServer());
-				if (!IsKcpsessConnected())
-				{
-					SetKcpConnectState(kConnected);
-					InitKcp(GetNewConv());
-				}
-				else
-				{
-					InitKcp(conv_, true);
-				}
-				SendAckAndConv();
-				len = 0;
+				SetConnState(kConnected);
+				InitKcp(GetNewConv());
 			}
-			else if (pktType == kAck)
-			{
-				if (!IsKcpsessConnected())
-				{
-					SetKcpConnectState(kConnected);
-					InitKcp(inputBuf_.readInt32());
-					readableLen -= 4;
-				}
-				len = 0;
-			}
-			else if (pktType == kRst)
-			{
-				assert(IsClient());
-				if (IsKcpsessConnected() || kcpConnState_ == kConnecting)
-				{
-					SetKcpConnectState(kResetting);
-					SendSyn();
-				}
-				len = 0;
-			}
-			else if (pktType == kPsh)
-			{
-				if (IsKcpsessConnected())
-				{
-					int result = ikcp_input(kcp_, inputBuf_.peek(), readableLen);
-					if (result == 0)
-					{
-						Update(true);
-						len = KcpRecv(userBuf); // if err, -1, -2, -3
-					}
-					else // if (result < 0)
-						len = result - 3; // ikcp_input err, -4, -5, -6
-				}
-				else  // pktType == kPsh, but kcp not connected
-				{
-					if (IsServer())
-						SendRst();
-					len = 0;
-				}
-			}
-			else
-			{
-				len = -8; // pktType err
-			}
+			SendAckAndConv();
+			len = 0;
 		}
-		else if (dataType == kHeartbeat)
+		else if (pktType == kAck)
 		{
-			if (IsServer())
+			assert(IsClient());
+			int32_t rcvConv = inputBuf_.readInt32();
+			readableLen -= 4;
+
+			if (curConnState_ == kConnecting)
 			{
-				if (!IsKcpsessConnected())
-					SendRst();
-				else
-					SendHeartbeat();
+				InitKcp(rcvConv);
+				SetConnState(kConnected);
 			}
 			len = 0;
 		}
+		else if (pktType == kRst)
+		{
+			assert(IsClient());
+			if (IsConnected())
+			{
+				CopyKcpDataToSndQ();
+				SetConnState(kResetting);
+			}
+			len = 0;
+		}
+		else if (pktType == kPsh)
+		{
+			if (IsConnected())
+			{
+				int result = ikcp_input(kcp_, inputBuf_.peek(), readableLen);
+				if (result == 0)
+				{
+					ikcp_update(kcp_, curTsMsFunc_());
+					len = KcpRecv(userBuf); // if err, -1, -2, -3
+				}
+				else // if (result < 0)
+					len = result - 3; // ikcp_input err, -4, -5, -6
+			}
+			else  // pktType == kPsh, but kcp not connected
+			{
+				if (IsServer())
+					SendRst();
+				len = 0;
+			}
+		}
 		else
 		{
-			len = -9; // dataType err
+			len = -7; // pktType err
 		}
-
-		UpdateLastRcvDataTs();
 		inputBuf_.retrieve(readableLen);
-	}
-
-	void UpdateLastRcvDataTs() { lastRcvDataTs_ = curTsCb_(); }
-
-	void SendHeartbeat()
-	{
-		//assert(IsClient());
-		//outputBuf_.appendInt8(kReliable);
-		outputBuf_.appendInt8(kHeartbeat);
-		OutputAfterCheckingFec();
 	}
 
 	void SendRst()
 	{
 		assert(IsServer());
-		outputBuf_.appendInt8(kReliable);
 		outputBuf_.appendInt8(kRst);
 		OutputAfterCheckingFec();
 	}
@@ -1043,7 +1009,6 @@ private:
 	void SendSyn()
 	{
 		assert(IsClient());
-		outputBuf_.appendInt8(kReliable);
 		outputBuf_.appendInt8(kSyn);
 		OutputAfterCheckingFec();
 	}
@@ -1051,15 +1016,13 @@ private:
 	void SendAckAndConv()
 	{
 		assert(IsServer());
-		outputBuf_.appendInt8(kReliable);
 		outputBuf_.appendInt8(kAck);
 		outputBuf_.appendInt32(conv_);
 		OutputAfterCheckingFec();
 	}
 
-	void InitKcp(const IUINT32 conv, bool reinit = false)
+	void InitKcp(const IUINT32 conv)
 	{
-		if (reinit) if (kcp_) ikcp_release(kcp_);
 		conv_ = conv;
 		kcp_ = ikcp_create(conv, this);
 		ikcp_wndsize(kcp_, sndWnd_, rcvWnd_);
@@ -1077,17 +1040,28 @@ private:
 		return newConv++;
 	}
 
-	void SetKcpConnectState(ConnectionStateE s) { kcpConnState_ = s; }
+	void SetConnState(const ConnectionStateE s)
+	{
+		ConnectionStateE lastState = curConnState_;
+		curConnState_ = s;
+		if (connectionCallback_ && lastState != s)
+		{
+			if (s == kConnected)
+				connectionCallback_(nullptr);
+			else if (s == kResetting)
+				connectionCallback_(&pendingSndDataDeque_);
+		}
+	}
 
 	int KcpRecv(Buf* userBuf)
 	{
-		assert(kcp_);
+		assert(kcp_); assert(userBuf);
 		int msgLen = ikcp_peeksize(kcp_);
 		if (msgLen <= 0)
 			return 0;
 		userBuf->ensureWritableBytes(msgLen);
 		ikcp_recv(kcp_, userBuf->beginWrite(), msgLen);
-		userBuf->hasWritten(msgLen); // cause ret of ikcp_recv() equal to ikcp_peeksize()
+		userBuf->hasWritten(msgLen); // cause the ret of ikcp_recv() equal to ikcp_peeksize()
 		return msgLen;
 	}
 
@@ -1095,42 +1069,27 @@ private:
 	{
 		(void)kcp;
 		auto thisPtr = reinterpret_cast<KcpSession *>(user);
-
-		thisPtr->outputBuf_.appendInt8(kReliable);
 		thisPtr->outputBuf_.appendInt8(kPsh);
 		thisPtr->outputBuf_.append(data, len);
 		return thisPtr->OutputAfterCheckingFec();
 	}
 
-	int OutputAfterCheckingFec()
-	{
-		if (!fecEnable_)
-		{
-			assert(this->userOutputFunc_ != nullptr);
-			userOutputFunc_(outputBuf_.peek(), static_cast<int>(outputBuf_.readableBytes()));
-			outputBuf_.retrieveAll();
-			return 0;
-		}
-		else
-			return fec_.Output(&outputBuf_);
-	}
+	int OutputAfterCheckingFec() { return fec_.Output(&outputBuf_); }
 
 private:
 	ikcpcb* kcp_;
-	InputFunction userInputFunc_;
-	OutputFunction userOutputFunc_;
-	ConnectionStateE kcpConnState_;
+	UserInputFunction userInputFunc_;
+	UserOutputFunction userOutputFunc_;
+	ConnectionStateE curConnState_;
 	Buf outputBuf_;
 	Buf inputBuf_;
-	CurrentTimestampCallBack curTsCb_;
+	CurrentTimestampMsCallBack curTsMsFunc_;
 	IUINT32 conv_;
-	IUINT32 timeoutMs_;
 	RoleTypeE role_;
-	std::queue<std::string> sndQueueBeforeConned_;
-	bool fecEnable_;
+	std::deque<std::string> pendingSndDataDeque_;
 	Fec fec_;
 	IUINT32 nextUpdateTs_;
-	IUINT32 lastRcvDataTs_;
+	KcpSessionConnectionCallback connectionCallback_;
 
 private:
 	// kcp config...
@@ -1145,6 +1104,5 @@ private:
 	int mtu_;
 	int rx_minrto_;
 };
-typedef std::shared_ptr<KcpSession> KcpSessionPtr;
 
 }
