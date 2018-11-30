@@ -72,12 +72,12 @@ void udp_output(const void *buf, int len, int fd, struct sockaddr* dst)
 	::sendto(fd, (const char*)buf, len, 0, dst, sizeof(*dst));
 }
 
-kcpsess::UserInputData udp_input(char *buf, int len, int fd, struct sockaddr_in from)
+KcpSession::UserInputData udp_input(char *buf, int len, int fd, struct sockaddr_in from)
 {
 	socklen_t fromAddrLen = sizeof(from);
 	int recvLen = ::recvfrom(fd, buf, len, 0,
 		(struct sockaddr*)&from, &fromAddrLen);
-	return kcpsess::UserInputData(buf, recvLen);
+	return KcpSession::UserInputData(buf, recvLen);
 }
 
 

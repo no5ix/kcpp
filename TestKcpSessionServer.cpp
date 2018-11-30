@@ -84,7 +84,7 @@ void udp_output(const void *buf, int len, int fd, struct sockaddr_in* dst)
 }
 
 bool isSimulatingPackageLoss = false;
-kcpsess::UserInputData udp_input(char* buf, int len, int fd, struct sockaddr_in* from)
+KcpSession::UserInputData udp_input(char* buf, int len, int fd, struct sockaddr_in* from)
 {
 	socklen_t fromAddrLen = sizeof(*from);
 	int recvLen = ::recvfrom(fd, buf, len, 0,
@@ -99,7 +99,7 @@ kcpsess::UserInputData udp_input(char* buf, int len, int fd, struct sockaddr_in*
 			recvLen = 0;
 		}
 	}
-	return kcpsess::UserInputData(buf, recvLen);
+	return KcpSession::UserInputData(buf, recvLen);
 }
 
 void handle_udp_msg(int fd)
@@ -166,7 +166,7 @@ void handle_udp_msg(int fd)
 
 				memset(sndBuf, 0, SND_BUFF_LEN);
 				((uint32_t*)sndBuf)[0] = nextRcvIndex - 1;
-				int result = kcpServer.Send(sndBuf, SND_BUFF_LEN, kcpsess::TransmitModeE::kUnreliable);
+				int result = kcpServer.Send(sndBuf, SND_BUFF_LEN, KcpSession::TransmitModeE::kUnreliable);
 				if (result < 0)
 				{
 					printf("kcpSession Send failed\n");

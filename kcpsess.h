@@ -550,35 +550,11 @@ private:
 };
 
 
-struct UserInputData
-{
-	UserInputData(char *data = nullptr, const int len = 0)
-	{
-		this->len_ = len;
-		if (len > 0)
-			this->data_ = data;
-		else
-			this->data_ = nullptr;
-	}
-	char* data_;
-	int len_;
-};
-
-
-class KcpSession;
-typedef std::shared_ptr<KcpSession> KcpSessionPtr;
-typedef std::function<void(const void* pendingSendData, int pendingSendDataLen)> UserOutputFunction;
-typedef std::function<UserInputData()> UserInputFunction;
-typedef std::function<int()> CurrentTimestampMsCallBack;
-typedef std::function<void(std::deque<std::string>* pendingSendDataDeque)> KcpSessionConnectionCallback;
-enum TransmitModeE { kUnreliable = 88, kReliable };
-
-
 class Fec
 {
 public:
 	typedef std::function<void(Buf*, int&, int)> RecvFuncion;
-	Fec(const UserOutputFunction& userOutputFunc, const RecvFuncion& rcvFunc)
+	Fec(const std::function<void(const void*, int)>& userOutputFunc, const RecvFuncion& rcvFunc)
 		: userOutputFunc_(userOutputFunc), rcvFunc_(rcvFunc),
 		nextSndSn_(0), nextRcvSn_(0), isFinishedThisRound_(true)
 	{}
@@ -727,7 +703,7 @@ private:
 	static const size_t kMaxSeparatePktDataSize = (1460 - (kRedundancyCnt_ * kHeaderLen)) / kRedundancyCnt_;
 
 	RecvFuncion rcvFunc_;
-	UserOutputFunction userOutputFunc_;
+	std::function<void(const void*, int)> userOutputFunc_;
 	std::deque<std::string> outputPktDeque_;
 	std::unordered_map<int, std::string> inputFrgMap_;
 	int32_t nextSndSn_;
@@ -736,27 +712,49 @@ private:
 };
 
 
+
+class KcpSession;
+typedef std::shared_ptr<KcpSession> KcpSessionPtr;
+
 class KcpSession
 {
 public:
-	enum ConnectionStateE { kConnecting, kConnected, kResetting, kReset };
+	struct UserInputData
+	{
+		UserInputData(char *data = nullptr, const int len = 0)
+		{
+			this->len_ = len;
+			if (len > 0)
+				this->data_ = data;
+			else
+				this->data_ = nullptr;
+		}
+		char* data_;
+		int len_;
+	};
+
+	typedef std::function<void(const void* pendingSendData, int pendingSendDataLen)> UserOutputFunction;
+	typedef std::function<UserInputData()> UserInputFunction;
+	typedef std::function<int()> CurrentTimestampMsFunc;
+	typedef std::function<void(std::deque<std::string>* pendingSendDataDeque)> KcpSessionConnectionCallback;
+	enum TransmitModeE { kUnreliable = 88, kReliable };
 	enum RoleTypeE { kSrv, kCli };
+	enum ConnectionStateE { kConnecting, kConnected, kResetting, kReset };
 	enum PktTypeE { kSyn = 66, kAck, kPsh, kRst };
 
 public:
 	KcpSession(const RoleTypeE role,
 		const UserOutputFunction& userOutputFunc,
 		const UserInputFunction& userInputFunc,
-		const CurrentTimestampMsCallBack& currentTimestampMsFunc)
+		const CurrentTimestampMsFunc& currentTimestampMsFunc)
 		:
 		role_(role),
 		conv_(0),
-		userOutputFunc_(userOutputFunc),
 		userInputFunc_(userInputFunc),
 		curTsMsFunc_(currentTimestampMsFunc),
 		kcp_(nullptr),
 		curConnState_(kConnecting),
-		fec_(userOutputFunc_, std::bind(&KcpSession::DoRecv, this, std::placeholders::_1,
+		fec_(userOutputFunc, std::bind(&KcpSession::DoRecv, this, std::placeholders::_1,
 			std::placeholders::_2, std::placeholders::_3)),
 		nextUpdateTs_(0),
 		sndWnd_(128),
@@ -818,8 +816,6 @@ public:
 	}
 
 	~KcpSession() { if (kcp_) ikcp_release(kcp_); }
-
-
 
 private:
 
@@ -1079,11 +1075,10 @@ private:
 private:
 	ikcpcb* kcp_;
 	UserInputFunction userInputFunc_;
-	UserOutputFunction userOutputFunc_;
 	ConnectionStateE curConnState_;
 	Buf outputBuf_;
 	Buf inputBuf_;
-	CurrentTimestampMsCallBack curTsMsFunc_;
+	CurrentTimestampMsFunc curTsMsFunc_;
 	IUINT32 conv_;
 	RoleTypeE role_;
 	std::deque<std::string> pendingSndDataDeque_;
