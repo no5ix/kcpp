@@ -756,6 +756,7 @@ private:
 			}
 		}
 		else if (frgCnt == 1)
+		{
 			if (on_)
 				PrependPrePktAndFlush(oBuf);
 			else
@@ -763,6 +764,7 @@ private:
 				oBuf->prepend(outputPktDeque_.back());
 				FlushOutputBuffer(oBuf);
 			}
+		}
 	}
 
 	void PrependPrePktAndFlush(Buf* oBuf)
@@ -813,7 +815,7 @@ private:
 			if (pktType == static_cast<PktTypeE>(kUnreliable))
 			{
 				rcvFrgCnt = iBuf->readInt8();
-				if (rcvFrgCnt > 1 && rcvFrgCnt <= kMaxFrgCnt)
+				if (rcvFrgCnt > 1 && static_cast<size_t>(rcvFrgCnt) <= kMaxFrgCnt)
 				{
 					rcvFrg = iBuf->readInt8();
 					checkDataLenFunc(kUnreliable);
