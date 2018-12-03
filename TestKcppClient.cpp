@@ -15,7 +15,7 @@
 	#include <time.h>
 #endif
 
-#include "kcpsess.h"
+#include "kcpp.h"
 
 #define SERVER_PORT 8888
 
@@ -29,7 +29,7 @@
 // #define SERVER_IP "172.96.239.56"
 #define SERVER_IP "127.0.0.1"
 
-using kcpsess::KcpSession;
+using kcpp::KcpSession;
 
 #ifdef WIN32
 inline int
@@ -72,12 +72,12 @@ void udp_output(const void *buf, int len, int fd, struct sockaddr* dst)
 	::sendto(fd, (const char*)buf, len, 0, dst, sizeof(*dst));
 }
 
-KcpSession::UserInputData udp_input(char *buf, int len, int fd, struct sockaddr_in from)
+kcpp::UserInputData udp_input(char *buf, int len, int fd, struct sockaddr_in from)
 {
 	socklen_t fromAddrLen = sizeof(from);
 	int recvLen = ::recvfrom(fd, buf, len, 0,
 		(struct sockaddr*)&from, &fromAddrLen);
-	return KcpSession::UserInputData(buf, recvLen);
+	return kcpp::UserInputData(buf, recvLen);
 }
 
 
@@ -86,14 +86,14 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 {
 	char sndBuf[SND_BUFF_LEN];
 	char rcvBuf[RCV_BUFF_LEN];
-	kcpsess::Buf kcpsessRcvBuf; // cause we don't know how big the recv_data is
+	kcpp::Buf kcpsessRcvBuf; // cause we don't know how big the recv_data is
 
 	struct sockaddr_in from;
 	int len = 0;
 	uint32_t index = 11;
 
 	KcpSession kcpClient(
-		KcpSession::RoleTypeE::kCli,
+		kcpp::RoleTypeE::kCli,
 		std::bind(udp_output, std::placeholders::_1, std::placeholders::_2, fd, dst),
 		std::bind(udp_input, rcvBuf, RCV_BUFF_LEN, fd, std::ref(from)),
 		std::bind(iclock));
@@ -101,7 +101,8 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 #if TEST_APPLICATION_LEVEL_CONGESTION_CONTROL
 
 	const uint32_t testPassIndex = 66666;
-	kcpClient.SetKcpConfig(1024, 1024, 4096, 1, 1, 1, 1, 0, 300, 5);
+	kcpClient.SetConfig(111, 1024, 1024, 4096, 1, 1, 1, 1, 0, 5);
+
 	while (1)
 	{
 
@@ -132,8 +133,6 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 			}
 		}
 
-		//memset(rcvBuf, 0, RCV_BUFF_LEN);
-		//while (kcpClient.Recv(rcvBuf, len))
 		while (kcpClient.Recv(&kcpsessRcvBuf, len))
 		{
 			if (len < 0)
@@ -143,7 +142,6 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 			}
 			else if (len > 0)
 			{
-				//uint32_t srvRcvMaxIndex = *(uint32_t*)(rcvBuf + 0);
 				uint32_t srvRcvMaxIndex = *(uint32_t*)(kcpsessRcvBuf.peek() + 0);
 				kcpsessRcvBuf.retrieveAll();
 				printf("unreliable msg from server: have recieved the max index = %d\n", (int)srvRcvMaxIndex);

@@ -456,12 +456,17 @@ struct IKCPSEG
 //---------------------------------------------------------------------
 struct IKCPCB
 {
+	IUINT32 fec_check_ts, fec_check_interval;
+	IINT32 fec_rtt_limit;
+	IUINT32 snd_sum, timeout_resnd_cnt;
+	IUINT32 loss_rate, fec_loss_limit;
+
 	IUINT32 conv, mtu, mss, state;
 	IUINT32 snd_una, snd_nxt, rcv_nxt;
-	IUINT32 ts_recent, ts_lastack, ssthresh;
+	IUINT32 ssthresh;
 	IINT32 rx_rttval, rx_srtt, rx_rto, rx_minrto;
 	IUINT32 snd_wnd, rcv_wnd, rmt_wnd, cwnd, probe;
-	IUINT32 current, interval, ts_flush, xmit;
+	IUINT32 current, interval, ts_flush;
 	IUINT32 nrcv_buf, nsnd_buf; // 收发缓存区中的Segment数量
 	IUINT32 nrcv_que, nsnd_que; // 收发队列中的Segment数量
 	IUINT32 nodelay, updated; // 非延迟ack，是否update(kcp需要上层通过不断的ikcp_update和ikcp_check来驱动kcp的收发过程)
@@ -564,7 +569,6 @@ int ikcp_waitsnd(const ikcpcb *kcp);
 // nc: 0:normal congestion control(default), 1:disable congestion control
 int ikcp_nodelay(ikcpcb *kcp, int nodelay, int interval, int resend, int nc);
 
-
 void ikcp_log(ikcpcb *kcp, int mask, const char *fmt, ...);
 
 // setup allocator
@@ -572,6 +576,9 @@ void ikcp_allocator(void* (*new_malloc)(size_t), void (*new_free)(void*));
 
 // read conv
 IUINT32 ikcp_getconv(const void *ptr);
+
+// return -1 for keep fec, 0 for close, 1 for open
+int ikcp_fec_check(ikcpcb *kcp);
 
 #ifdef __cplusplus
 }

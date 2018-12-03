@@ -20,6 +20,10 @@
 //=====================================================================
 // KCP BASIC
 //=====================================================================
+const IUINT32 IKCP_FEC_CHK_INTERVAL = 1000;
+const IUINT32 IKCP_FEC_RTT_LIMIT = 111;
+const IUINT32 IKCP_FEC_LOSS_RATE_LIMIT = 5;
+
 const IUINT32 IKCP_RTO_NDL = 30;		// no delay min rto
 const IUINT32 IKCP_RTO_MIN = 100;		// normal min rto
 const IUINT32 IKCP_RTO_DEF = 200;
@@ -238,13 +242,20 @@ ikcpcb* ikcp_create(IUINT32 conv, void *user)
 {
 	ikcpcb *kcp = (ikcpcb*)ikcp_malloc(sizeof(struct IKCPCB));
 	if (kcp == NULL) return NULL;
+
+	kcp->fec_check_ts = 0;
+	kcp->fec_check_interval = IKCP_FEC_CHK_INTERVAL;
+	kcp->fec_rtt_limit = IKCP_FEC_RTT_LIMIT;
+	kcp->snd_sum = 0;
+	kcp->timeout_resnd_cnt = 0;
+	kcp->loss_rate = 0;
+	kcp->fec_loss_limit = IKCP_FEC_LOSS_RATE_LIMIT;
+
 	kcp->conv = conv;
 	kcp->user = user;
 	kcp->snd_una = 0;
 	kcp->snd_nxt = 0;
 	kcp->rcv_nxt = 0;
-	kcp->ts_recent = 0;
-	kcp->ts_lastack = 0;
 	kcp->ts_probe = 0;
 	kcp->probe_wait = 0;
 	kcp->snd_wnd = IKCP_WND_SND;
@@ -288,7 +299,6 @@ ikcpcb* ikcp_create(IUINT32 conv, void *user)
 	kcp->ssthresh = IKCP_THRESH_INIT;
 	kcp->fastresend = 0;
 	kcp->nocwnd = 0;
-	kcp->xmit = 0;
   kcp->dead_link = IKCP_DEADLINK;
 	kcp->output = NULL;
 	kcp->writelog = NULL;
@@ -1322,7 +1332,7 @@ void ikcp_flush(ikcpcb *kcp)
 		else if (_itimediff(current, segment->resendts) >= 0) {
 			needsend = 1;
 			segment->xmit++;
-			kcp->xmit++;
+			++kcp->timeout_resnd_cnt;
 			// 更新重传时间信息，根据kcp的设置选择rto*2或rto*1.5，并记录lost标志。
 			if (kcp->nodelay == 0) {
 				segment->rto += kcp->rx_rto; // 以2倍的方式来增长(TCP的RTO默认也是2倍增长)
@@ -1352,6 +1362,7 @@ void ikcp_flush(ikcpcb *kcp)
 
 			if (size + need > (int)kcp->mtu) {
 				ikcp_output(kcp, buffer, size);
+				++kcp->snd_sum;
 				ptr = buffer;
 			}
 
@@ -1375,6 +1386,7 @@ void ikcp_flush(ikcpcb *kcp)
 	size = (int)(ptr - buffer);
 	if (size > 0) {
 		ikcp_output(kcp, buffer, size);
+		++kcp->snd_sum;
 	}
 
 	// update ssthresh
@@ -1409,6 +1421,22 @@ void ikcp_flush(ikcpcb *kcp)
 	}
 }
 
+// return -1 for keep fec, 0 for close, 1 for open
+int ikcp_fec_check(ikcpcb *kcp)
+{
+	IINT32 slap = _itimediff(kcp->current, kcp->fec_check_ts);
+	if (slap < 0)
+		return -1;
+	kcp->fec_check_ts= kcp->current + kcp->fec_check_interval;
+	if (kcp->snd_sum > 0)
+		kcp->loss_rate = (int)(1.0 * kcp->timeout_resnd_cnt / kcp->snd_sum * 100);
+	kcp->timeout_resnd_cnt = 0;
+	kcp->snd_sum = 0;
+	if (kcp->loss_rate >= kcp->fec_loss_limit && kcp->rx_srtt >= kcp->fec_rtt_limit)
+		return 1;
+	else
+		return 0;
+}
 
 //---------------------------------------------------------------------
 // update state (call it repeatedly, every 10ms-100ms), or you can ask 

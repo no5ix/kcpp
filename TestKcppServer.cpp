@@ -17,14 +17,13 @@
 	#include <time.h>
 #endif
 
-#include "kcpsess.h"
+#include "kcpp.h"
 
-using kcpsess::KcpSession;
+using kcpp::KcpSession;
 
 #define SERVER_PORT 8888
 
-//#define SND_BUFF_LEN kcpsess::Fec::kMaxSeparatePktDataSize
-#define SND_BUFF_LEN 9567
+#define SND_BUFF_LEN 8465
 
 #define RCV_BUFF_LEN 1500
 
@@ -84,7 +83,7 @@ void udp_output(const void *buf, int len, int fd, struct sockaddr_in* dst)
 }
 
 bool isSimulatingPackageLoss = false;
-KcpSession::UserInputData udp_input(char* buf, int len, int fd, struct sockaddr_in* from)
+kcpp::UserInputData udp_input(char* buf, int len, int fd, struct sockaddr_in* from)
 {
 	socklen_t fromAddrLen = sizeof(*from);
 	int recvLen = ::recvfrom(fd, buf, len, 0,
@@ -99,14 +98,14 @@ KcpSession::UserInputData udp_input(char* buf, int len, int fd, struct sockaddr_
 			recvLen = 0;
 		}
 	}
-	return KcpSession::UserInputData(buf, recvLen);
+	return kcpp::UserInputData(buf, recvLen);
 }
 
 void handle_udp_msg(int fd)
 {
 	char sndBuf[SND_BUFF_LEN];
 	char rcvBuf[RCV_BUFF_LEN];
-	kcpsess::Buf kcpsessRcvBuf; // cause we don't know how big the recv_data is
+	kcpp::Buf kcpsessRcvBuf; // cause we don't know how big the recv_data is
 
 	struct sockaddr_in* clientAddr = new struct sockaddr_in;  //clent_addr用于记录发送方的地址信息
 	uint32_t nextRcvIndex = 11;
@@ -114,7 +113,7 @@ void handle_udp_msg(int fd)
 	uint32_t index = 0;
 
 	KcpSession kcpServer(
-		KcpSession::RoleTypeE::kSrv,
+		kcpp::RoleTypeE::kSrv,
 		std::bind(udp_output, std::placeholders::_1, std::placeholders::_2, fd, clientAddr),
 		std::bind(udp_input, rcvBuf, RCV_BUFF_LEN, fd, clientAddr),
 		std::bind(iclock));
@@ -123,7 +122,7 @@ void handle_udp_msg(int fd)
 #if TEST_APPLICATION_LEVEL_CONGESTION_CONTROL
 
 	const uint32_t testPassIndex = 66666;
-	kcpServer.SetKcpConfig(1024, 1024, 4096, 1, 1, 1, 1, 0, 300, 5);
+	kcpServer.SetConfig(111, 1024, 1024, 4096, 1, 1, 1, 1, 0, 5);
 
 #else
 
@@ -134,8 +133,6 @@ void handle_udp_msg(int fd)
 
 	while (1)
 	{
-		//memset(rcvBuf, 0, RCV_BUFF_LEN);
-		//while (kcpServer.Recv(rcvBuf, len))
 		kcpServer.Update();
 		while (kcpServer.Recv(&kcpsessRcvBuf, len))
 		{
@@ -146,7 +143,6 @@ void handle_udp_msg(int fd)
 			}
 			else if (len > 0)
 			{
-				//index = *(uint32_t*)(rcvBuf + 0);
 				index = *(uint32_t*)(kcpsessRcvBuf.peek() + 0);
 				kcpsessRcvBuf.retrieveAll();
 
@@ -166,7 +162,8 @@ void handle_udp_msg(int fd)
 
 				memset(sndBuf, 0, SND_BUFF_LEN);
 				((uint32_t*)sndBuf)[0] = nextRcvIndex - 1;
-				int result = kcpServer.Send(sndBuf, SND_BUFF_LEN, KcpSession::TransmitModeE::kUnreliable);
+				int result = kcpServer.Send(sndBuf, SND_BUFF_LEN, kcpp::TransmitModeE::kUnreliable);
+				//int result = kcpServer.Send(sndBuf, SND_BUFF_LEN);
 				if (result < 0)
 				{
 					printf("kcpSession Send failed\n");
