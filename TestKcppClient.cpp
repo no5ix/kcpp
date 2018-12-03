@@ -86,13 +86,16 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 {
 	char sndBuf[SND_BUFF_LEN];
 	char rcvBuf[RCV_BUFF_LEN];
-	kcpp::Buf kcpsessRcvBuf; // cause we don't know how big the recv_data is
+
+	// we can't use char array, cause we don't know how big the recv_data is
+	kcpp::Buf kcppRcvBuf;
 
 	struct sockaddr_in from;
 	int len = 0;
-	uint32_t index = 11;
+	uint32_t initIndex = 11;
+	uint32_t nextSndIndex = initIndex;
 
-	KcpSession kcpClient(
+	KcpSession kcppClient(
 		kcpp::RoleTypeE::kCli,
 		std::bind(udp_output, std::placeholders::_1, std::placeholders::_2, fd, dst),
 		std::bind(udp_input, rcvBuf, RCV_BUFF_LEN, fd, std::ref(from)),
@@ -101,7 +104,7 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 #if TEST_APPLICATION_LEVEL_CONGESTION_CONTROL
 
 	const uint32_t testPassIndex = 66666;
-	kcpClient.SetConfig(111, 1024, 1024, 4096, 1, 1, 1, 1, 0, 5);
+	kcppClient.SetConfig(111, 1024, 1024, 4096, 1, 1, 1, 1, 0, 5);
 
 	while (1)
 	{
@@ -119,13 +122,13 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 
 #endif // TEST_APPLICATION_LEVEL_CONGESTION_CONTROL
 
-		kcpClient.Update();
-		if (kcpClient.CheckCanSend())
+		kcppClient.Update();
+		if (kcppClient.CheckCanSend())
 		{
 			memset(sndBuf, 0, SND_BUFF_LEN);
-			((uint32_t*)sndBuf)[0] = index++;
+			((uint32_t*)sndBuf)[0] = nextSndIndex++;
 
-			len = kcpClient.Send(sndBuf, SND_BUFF_LEN);
+			len = kcppClient.Send(sndBuf, SND_BUFF_LEN);
 			if (len < 0)
 			{
 				printf("kcpSession Send failed\n");
@@ -133,7 +136,7 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 			}
 		}
 
-		while (kcpClient.Recv(&kcpsessRcvBuf, len))
+		while (kcppClient.Recv(&kcppRcvBuf, len))
 		{
 			if (len < 0)
 			{
@@ -142,8 +145,8 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 			}
 			else if (len > 0)
 			{
-				uint32_t srvRcvMaxIndex = *(uint32_t*)(kcpsessRcvBuf.peek() + 0);
-				kcpsessRcvBuf.retrieveAll();
+				uint32_t srvRcvMaxIndex = *(uint32_t*)(kcppRcvBuf.peek() + 0);
+				kcppRcvBuf.retrieveAll();
 				printf("unreliable msg from server: have recieved the max index = %d\n", (int)srvRcvMaxIndex);
 				if (srvRcvMaxIndex >= testPassIndex)
 				{

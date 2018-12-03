@@ -20,9 +20,9 @@
 //=====================================================================
 // KCP BASIC
 //=====================================================================
-const IUINT32 IKCP_FEC_CHK_INTERVAL = 1000;
-const IUINT32 IKCP_FEC_RTT_LIMIT = 111;
-const IUINT32 IKCP_FEC_LOSS_RATE_LIMIT = 5;
+const IUINT32 IKCP_RDC_CHK_INTERVAL = 100;
+const IUINT32 IKCP_RDC_RTT_LIMIT = 111;
+const IUINT32 IKCP_RDC_LOSS_RATE_LIMIT = 5;
 
 const IUINT32 IKCP_RTO_NDL = 30;		// no delay min rto
 const IUINT32 IKCP_RTO_MIN = 100;		// normal min rto
@@ -243,13 +243,13 @@ ikcpcb* ikcp_create(IUINT32 conv, void *user)
 	ikcpcb *kcp = (ikcpcb*)ikcp_malloc(sizeof(struct IKCPCB));
 	if (kcp == NULL) return NULL;
 
-	kcp->fec_check_ts = 0;
-	kcp->fec_check_interval = IKCP_FEC_CHK_INTERVAL;
-	kcp->fec_rtt_limit = IKCP_FEC_RTT_LIMIT;
+	kcp->rdc_check_ts = 0;
+	kcp->rdc_check_interval = IKCP_RDC_CHK_INTERVAL;
+	kcp->rdc_rtt_limit = IKCP_RDC_RTT_LIMIT;
 	kcp->snd_sum = 0;
 	kcp->timeout_resnd_cnt = 0;
 	kcp->loss_rate = 0;
-	kcp->fec_loss_limit = IKCP_FEC_LOSS_RATE_LIMIT;
+	kcp->rdc_loss_rate_limit = IKCP_RDC_LOSS_RATE_LIMIT;
 
 	kcp->conv = conv;
 	kcp->user = user;
@@ -1421,18 +1421,18 @@ void ikcp_flush(ikcpcb *kcp)
 	}
 }
 
-// return -1 for keep fec, 0 for close, 1 for open
-int ikcp_fec_check(ikcpcb *kcp)
+// return -1 for keep rdc, 0 for close, 1 for open
+int ikcp_rdc_check(ikcpcb *kcp)
 {
-	IINT32 slap = _itimediff(kcp->current, kcp->fec_check_ts);
+	IINT32 slap = _itimediff(kcp->current, kcp->rdc_check_ts);
 	if (slap < 0)
 		return -1;
-	kcp->fec_check_ts= kcp->current + kcp->fec_check_interval;
+	kcp->rdc_check_ts= kcp->current + kcp->rdc_check_interval;
 	if (kcp->snd_sum > 0)
 		kcp->loss_rate = (int)(1.0 * kcp->timeout_resnd_cnt / kcp->snd_sum * 100);
 	kcp->timeout_resnd_cnt = 0;
 	kcp->snd_sum = 0;
-	if (kcp->loss_rate >= kcp->fec_loss_limit && kcp->rx_srtt >= kcp->fec_rtt_limit)
+	if (kcp->loss_rate >= kcp->rdc_loss_rate_limit && kcp->rx_srtt >= kcp->rdc_rtt_limit)
 		return 1;
 	else
 		return 0;

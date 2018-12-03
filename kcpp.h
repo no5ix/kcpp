@@ -576,11 +576,11 @@ enum ConnectionStateE { kConnecting, kConnected, kResetting, kReset };
 enum PktTypeE { kSyn = 66, kAck, kPsh, kRst };
 
 
-class Fec
+class Rdc
 {
 public:
 	typedef std::function<void(Buf*, int&, int, PktTypeE)> RecvFuncion;
-	Fec(const UserOutputFunction& userOutputFunc, const RecvFuncion& rcvFunc)
+	Rdc(const UserOutputFunction& userOutputFunc, const RecvFuncion& rcvFunc)
 		:
 		userOutputFunc_(userOutputFunc), rcvFunc_(rcvFunc), nextSndSn_(0), nextRcvSn_(0),
 		isThisRoundFinished_(true), on_(false), mss_(111)
@@ -873,7 +873,7 @@ public:
 		curTsMsFunc_(currentTimestampMsFunc),
 		kcp_(nullptr),
 		curConnState_(kConnecting),
-		fec_(userOutputFunc, std::bind(&KcpSession::DoRecv, this, std::placeholders::_1,
+		rdc_(userOutputFunc, std::bind(&KcpSession::DoRecv, this, std::placeholders::_1,
 			std::placeholders::_2, std::placeholders::_3, std::placeholders::_4)),
 		nextUpdateTs_(0),
 		sndWnd_(128),
@@ -932,7 +932,7 @@ public:
 		const int nc = 1, const int streamMode = 0, const int rx_minrto = 10)
 	{
 		assert(maxWaitSndCount > sndWnd);
-		fec_.SetMTU(mtu);
+		rdc_.SetMTU(mtu);
 		sndWnd_ = sndWnd; rcvWnd_ = rcvWnd; maxWaitSndCount_ = maxWaitSndCount;
 		nodelay_ = nodelay; interval_ = interval; resend_ = resend;
 		nc_ = nc; streamMode_ = streamMode; rx_minrto_ = rx_minrto;
@@ -950,9 +950,9 @@ private:
 		IUINT32 curTimestamp = static_cast<IUINT32>(curTsMsFunc_());
 		if (kcp_ && IsConnected())
 		{
-			int newFecState = ikcp_fec_check(kcp_);
+			int newFecState = ikcp_rdc_check(kcp_);
 			if (newFecState >= 0)
-				fec_.Switch(newFecState == 1 ? true : false);
+				rdc_.Switch(newFecState == 1 ? true : false);
 			int result = FlushSndQueueBeforeConned();
 			if (result < 0)
 				return result;
@@ -976,7 +976,7 @@ private:
 		if (transmitMode == kUnreliable)
 		{
 			outputBuf_.append(data, len);
-			int error = OutputAfterCheckingFec(static_cast<PktTypeE>(kUnreliable));
+			int error = OutputAfterCheckingRdc(static_cast<PktTypeE>(kUnreliable));
 			if (error)
 				return error;
 		}
@@ -1003,7 +1003,7 @@ private:
 
 	bool RecvImpl(Buf* userBuf, int& len)
 	{
-		if (fec_.IsThisRoundFinished())
+		if (rdc_.IsThisRoundFinished())
 		{
 			const UserInputData& rawRecvdata = userInputFunc_();
 			if (rawRecvdata.len_ <= 0)
@@ -1013,7 +1013,7 @@ private:
 			}
 			inputBuf_.append(rawRecvdata.data_, rawRecvdata.len_);
 		}
-		return fec_.Input(userBuf, len, &inputBuf_);
+		return rdc_.Input(userBuf, len, &inputBuf_);
 	}
 
 	int FlushSndQueueBeforeConned()
@@ -1121,20 +1121,20 @@ private:
 	void SendRst()
 	{
 		assert(IsServer());
-		OutputAfterCheckingFec(kRst);
+		OutputAfterCheckingRdc(kRst);
 	}
 
 	void SendSyn()
 	{
 		assert(IsClient());
-		OutputAfterCheckingFec(kSyn);
+		OutputAfterCheckingRdc(kSyn);
 	}
 
 	void SendAckAndConv()
 	{
 		assert(IsServer());
 		outputBuf_.appendInt32(conv_);
-		OutputAfterCheckingFec(kAck);
+		OutputAfterCheckingRdc(kAck);
 	}
 
 	void InitKcp(const IUINT32 conv)
@@ -1186,10 +1186,10 @@ private:
 		(void)kcp;
 		auto thisPtr = reinterpret_cast<KcpSession *>(user);
 		thisPtr->outputBuf_.append(data, len);
-		return thisPtr->OutputAfterCheckingFec(kPsh);
+		return thisPtr->OutputAfterCheckingRdc(kPsh);
 	}
 
-	int OutputAfterCheckingFec(PktTypeE pktType) { return fec_.Output(&outputBuf_, pktType); }
+	int OutputAfterCheckingRdc(PktTypeE pktType) { return rdc_.Output(&outputBuf_, pktType); }
 
 private:
 	ikcpcb* kcp_;
@@ -1201,7 +1201,7 @@ private:
 	IUINT32 conv_;
 	RoleTypeE role_;
 	std::deque<std::string> pendingSndDataDeque_;
-	Fec fec_;
+	Rdc rdc_;
 	IUINT32 nextUpdateTs_;
 	KcpSessionConnectionCallback connectionCallback_;
 

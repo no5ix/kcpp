@@ -456,10 +456,10 @@ struct IKCPSEG
 //---------------------------------------------------------------------
 struct IKCPCB
 {
-	IUINT32 fec_check_ts, fec_check_interval;
-	IINT32 fec_rtt_limit;
+	IUINT32 rdc_check_ts, rdc_check_interval;
+	IINT32 rdc_rtt_limit;
 	IUINT32 snd_sum, timeout_resnd_cnt;
-	IUINT32 loss_rate, fec_loss_limit;
+	IUINT32 loss_rate, rdc_loss_rate_limit;
 
 	IUINT32 conv, mtu, mss, state;
 	IUINT32 snd_una, snd_nxt, rcv_nxt;
@@ -577,8 +577,8 @@ void ikcp_allocator(void* (*new_malloc)(size_t), void (*new_free)(void*));
 // read conv
 IUINT32 ikcp_getconv(const void *ptr);
 
-// return -1 for keep fec, 0 for close, 1 for open
-int ikcp_fec_check(ikcpcb *kcp);
+// return -1 for keep rdc, 0 for close, 1 for open
+int ikcp_rdc_check(ikcpcb *kcp);
 
 #ifdef __cplusplus
 }

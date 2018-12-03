@@ -105,14 +105,18 @@ void handle_udp_msg(int fd)
 {
 	char sndBuf[SND_BUFF_LEN];
 	char rcvBuf[RCV_BUFF_LEN];
-	kcpp::Buf kcpsessRcvBuf; // cause we don't know how big the recv_data is
+
+	// we can't use char array, cause we don't know how big the recv_data is
+	kcpp::Buf kcppRcvBuf;
 
 	struct sockaddr_in* clientAddr = new struct sockaddr_in;  //clent_addr用于记录发送方的地址信息
-	uint32_t nextRcvIndex = 11;
+	uint32_t initIndex = 11;
+	uint32_t nextRcvIndex = initIndex;
 	int len = 0;
-	uint32_t index = 0;
+	uint32_t rcvedIndex = 0;
+	IUINT32 startTs = 0;
 
-	KcpSession kcpServer(
+	KcpSession kcppServer(
 		kcpp::RoleTypeE::kSrv,
 		std::bind(udp_output, std::placeholders::_1, std::placeholders::_2, fd, clientAddr),
 		std::bind(udp_input, rcvBuf, RCV_BUFF_LEN, fd, clientAddr),
@@ -122,7 +126,7 @@ void handle_udp_msg(int fd)
 #if TEST_APPLICATION_LEVEL_CONGESTION_CONTROL
 
 	const uint32_t testPassIndex = 66666;
-	kcpServer.SetConfig(111, 1024, 1024, 4096, 1, 1, 1, 1, 0, 5);
+	kcppServer.SetConfig(111, 1024, 1024, 4096, 1, 1, 1, 1, 0, 5);
 
 #else
 
@@ -133,8 +137,8 @@ void handle_udp_msg(int fd)
 
 	while (1)
 	{
-		kcpServer.Update();
-		while (kcpServer.Recv(&kcpsessRcvBuf, len))
+		kcppServer.Update();
+		while (kcppServer.Recv(&kcppRcvBuf, len))
 		{
 			if (len < 0 && !isSimulatingPackageLoss)
 			{
@@ -143,26 +147,31 @@ void handle_udp_msg(int fd)
 			}
 			else if (len > 0)
 			{
-				index = *(uint32_t*)(kcpsessRcvBuf.peek() + 0);
-				kcpsessRcvBuf.retrieveAll();
+				rcvedIndex = *(uint32_t*)(kcppRcvBuf.peek() + 0);
+				kcppRcvBuf.retrieveAll();
 
-				if (index <= testPassIndex)
-					printf("reliable msg from client: %d\n", (int)index);
+				if (rcvedIndex <= testPassIndex)
+					printf("reliable msg from client: %d\n", (int)rcvedIndex);
 
-				if (index == testPassIndex)
-					printf("test passes, yay! \n please close me ...\n");
+				if (rcvedIndex == initIndex)
+					startTs = iclock();
 
-				if (kcpServer.IsConnected() && index != nextRcvIndex)
+				if (rcvedIndex == testPassIndex)
+					printf("test passes, yay!\n cost %f secs, now u can close me ...\n",
+						1.0 * (iclock() - startTs) / 1000);
+
+				if (kcppServer.IsConnected() && rcvedIndex != nextRcvIndex)
 				{
 					// 如果收到的包不连续
-					printf("ERROR index != nextRcvIndex : %d != %d, kcpServer.IsKcpConnected() = %d\n", (int)index, (int)nextRcvIndex, (kcpServer.IsConnected() ? 1 : 0));
+					printf("ERROR index != nextRcvIndex : %d != %d, kcpServer.IsKcpConnected() = %d\n",
+						(int)rcvedIndex, (int)nextRcvIndex, (kcppServer.IsConnected() ? 1 : 0));
 					return;
 				}
 				++nextRcvIndex;
 
 				memset(sndBuf, 0, SND_BUFF_LEN);
 				((uint32_t*)sndBuf)[0] = nextRcvIndex - 1;
-				int result = kcpServer.Send(sndBuf, SND_BUFF_LEN, kcpp::TransmitModeE::kUnreliable);
+				int result = kcppServer.Send(sndBuf, SND_BUFF_LEN, kcpp::TransmitModeE::kUnreliable);
 				//int result = kcpServer.Send(sndBuf, SND_BUFF_LEN);
 				if (result < 0)
 				{
