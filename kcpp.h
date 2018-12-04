@@ -151,7 +151,7 @@ namespace kcpp
 {
 
 // a light weight buf.
-// thx to chensuo, modify on muduo and make it safe to prepend data of any length.
+// thx to chensuo, modify on muduo::net::Buffer and make it safe to prepend data of any length.
 
 /// A buffer class modeled after org.jboss.netty.buffer.ChannelBuffer
 ///
@@ -745,24 +745,34 @@ private:
 				else
 				{
 					assert(i == 1);
-					if (on_)
-						PrependPrePktAndFlush(oBuf);
-					else
-					{
-						oBuf->prepend(*curIt);
-						FlushOutputBuffer(oBuf);
-					}
+					HandleDynamicRdc(oBuf, *curIt);
 				}
 			}
 		}
 		else if (frgCnt == 1)
 		{
-			if (on_)
-				PrependPrePktAndFlush(oBuf);
-			else
+			HandleDynamicRdc(oBuf, outputPktDeque_.back());
+		}
+	}
+
+	void HandleDynamicRdc(Buf* oBuf, const std::string& pendingSndData)
+	{
+		if (on_)
+			PrependPrePktAndFlush(oBuf);
+		else
+		{
+			oBuf->prepend(pendingSndData);
+			FlushOutputBuffer(oBuf);
+
+			size_t sumPktLen = 0;
+			for (auto it = outputPktDeque_.end() - 1; it != outputPktDeque_.begin(); --it)
 			{
-				oBuf->prepend(outputPktDeque_.back());
-				FlushOutputBuffer(oBuf);
+				sumPktLen += it->size();
+				if (sumPktLen > mss_)
+				{
+					outputPktDeque_.erase(outputPktDeque_.begin(), it);
+					break;
+				}
 			}
 		}
 	}
@@ -772,17 +782,18 @@ private:
 		for (size_t i = 1; i <= outputPktDeque_.size(); ++i)
 		{
 			auto curIt = outputPktDeque_.end() - i;
-			bool isFirst = curIt == outputPktDeque_.begin();
+			bool isFront = curIt == outputPktDeque_.begin();
 			oBuf->prepend(*curIt);
 
 			size_t prePktDataLen = 0;
-			if (!isFirst)
+			if (!isFront)
 				prePktDataLen = (curIt - 1)->size();
 
-			if (oBuf->readableBytes() + prePktDataLen >= mss_ || isFirst)
+			if (oBuf->readableBytes() + prePktDataLen >= mss_ || isFront)
 			{
 				FlushOutputBuffer(oBuf);
-				outputPktDeque_.pop_front();
+				if (oBuf->readableBytes() + prePktDataLen >= mss_)
+					outputPktDeque_.erase(outputPktDeque_.begin(), curIt);
 				break;
 			}
 		}

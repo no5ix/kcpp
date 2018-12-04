@@ -83,6 +83,7 @@ void udp_output(const void *buf, int len, int fd, struct sockaddr_in* dst)
 }
 
 bool isSimulatingPackageLoss = false;
+float kSimulatePackageLossRate = 0.2f; // simulate package loss rate 20%
 kcpp::UserInputData udp_input(char* buf, int len, int fd, struct sockaddr_in* from)
 {
 	socklen_t fromAddrLen = sizeof(*from);
@@ -91,10 +92,11 @@ kcpp::UserInputData udp_input(char* buf, int len, int fd, struct sockaddr_in* fr
 	if (recvLen > 0)
 	{
 		isSimulatingPackageLoss = 
-			GetRandomFloatFromZeroToOne() > 0.8 ? true : false; // simulate package loss rate 20%
+			GetRandomFloatFromZeroToOne() > (1.f - kSimulatePackageLossRate) ? true : false;
 		if (isSimulatingPackageLoss)
 		{
 			//printf("server: simulate package loss!!\n");
+			buf = nullptr;
 			recvLen = 0;
 		}
 	}
@@ -109,7 +111,7 @@ void handle_udp_msg(int fd)
 	// we can't use char array, cause we don't know how big the recv_data is
 	kcpp::Buf kcppRcvBuf;
 
-	struct sockaddr_in* clientAddr = new struct sockaddr_in;  //clent_addr用于记录发送方的地址信息
+	struct sockaddr_in clientAddr;  //clent_addr用于记录发送方的地址信息
 	uint32_t initIndex = 11;
 	uint32_t nextRcvIndex = initIndex;
 	int len = 0;
@@ -118,8 +120,8 @@ void handle_udp_msg(int fd)
 
 	KcpSession kcppServer(
 		kcpp::RoleTypeE::kSrv,
-		std::bind(udp_output, std::placeholders::_1, std::placeholders::_2, fd, clientAddr),
-		std::bind(udp_input, rcvBuf, RCV_BUFF_LEN, fd, clientAddr),
+		std::bind(udp_output, std::placeholders::_1, std::placeholders::_2, fd, &clientAddr),
+		std::bind(udp_input, rcvBuf, RCV_BUFF_LEN, fd, &clientAddr),
 		std::bind(iclock));
 
 
@@ -157,8 +159,8 @@ void handle_udp_msg(int fd)
 					startTs = iclock();
 
 				if (rcvedIndex == testPassIndex)
-					printf("test passes, yay!\n cost %f secs, now u can close me ...\n",
-						1.0 * (iclock() - startTs) / 1000);
+					printf("\n test passes, yay! \n simulate package loss rate %f %% \n cost %f secs \n now u can close me ...\n",
+						(kSimulatePackageLossRate * 100.f), (1.0 * (iclock() - startTs) / 1000));
 
 				if (kcppServer.IsConnected() && rcvedIndex != nextRcvIndex)
 				{
