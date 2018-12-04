@@ -15,7 +15,7 @@
 
 - single-header-only
 - session implementation
-- dynamic fec
+- dynamic redundancy
 - two-channel
    - reliable
    - unreliable

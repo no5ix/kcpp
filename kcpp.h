@@ -150,7 +150,7 @@
 namespace kcpp
 {
 
-// a light weight buf.
+// a light weight buffer.
 // thx to chensuo, modify on muduo::net::Buffer and make it safe to prepend data of any length.
 
 /// A buffer class modeled after org.jboss.netty.buffer.ChannelBuffer
@@ -568,7 +568,7 @@ struct UserInputData
 
 typedef std::function<void(const void* pendingSendData, int pendingSendDataLen)> UserOutputFunction;
 typedef std::function<UserInputData()> UserInputFunction;
-typedef std::function<int()> CurrentTimestampMsFunc;
+typedef std::function<int()> CurrentTimestampMsFunction;
 typedef std::function<void(std::deque<std::string>* pendingSendDataDeque)> KcpSessionConnectionCallback;
 enum TransmitModeE { kUnreliable = 88, kReliable };
 enum RoleTypeE { kSrv, kCli };
@@ -849,10 +849,12 @@ private:
 	static const size_t kFrgCntLen = sizeof(int8_t);
 	static const size_t kFrgLen = sizeof(int8_t);
 	static const size_t kDataLen = sizeof(int16_t);
+
 	static const size_t kReliableHeaderLen = kPktTypeLen + kSnLen + kDataLen;
+	static const size_t kReliableDataLenLimit = kMaxMSS - kReliableHeaderLen;
+	
 	static const size_t kUnreliableHeaderLen = kPktTypeLen + kSnLen + kFrgCntLen + kFrgLen + kDataLen;
 	static const size_t kUnreliableDataLenLimit = kMaxMSS - kUnreliableHeaderLen;
-	static const size_t kReliableDataLenLimit = kMaxMSS - kReliableHeaderLen;
 
 	RecvFuncion rcvFunc_;
 	UserOutputFunction userOutputFunc_;
@@ -876,7 +878,7 @@ public:
 	KcpSession(const RoleTypeE role,
 		const UserOutputFunction& userOutputFunc,
 		const UserInputFunction& userInputFunc,
-		const CurrentTimestampMsFunc& currentTimestampMsFunc)
+		const CurrentTimestampMsFunction& currentTimestampMsFunc)
 		:
 		role_(role),
 		conv_(0),
@@ -939,12 +941,12 @@ public:
 
 	// should set before Send()
 	void SetConfig(const int mtu = 444, const int sndWnd = 128, const int rcvWnd = 128,
-		const int maxWaitSndCount = 512, const int nodelay = 1, const int interval = 10, const int resend = 1,
+		const int waitSndCntLimit = 512, const int nodelay = 1, const int interval = 10, const int resend = 1,
 		const int nc = 1, const int streamMode = 0, const int rx_minrto = 10)
 	{
-		assert(maxWaitSndCount > sndWnd);
+		assert(waitSndCntLimit > sndWnd);
 		rdc_.SetMTU(mtu);
-		sndWnd_ = sndWnd; rcvWnd_ = rcvWnd; maxWaitSndCount_ = maxWaitSndCount;
+		sndWnd_ = sndWnd; rcvWnd_ = rcvWnd; maxWaitSndCount_ = waitSndCntLimit;
 		nodelay_ = nodelay; interval_ = interval; resend_ = resend;
 		nc_ = nc; streamMode_ = streamMode; rx_minrto_ = rx_minrto;
 	}
@@ -961,9 +963,9 @@ private:
 		IUINT32 curTimestamp = static_cast<IUINT32>(curTsMsFunc_());
 		if (kcp_ && IsConnected())
 		{
-			int newFecState = ikcp_rdc_check(kcp_);
-			if (newFecState >= 0)
-				rdc_.Switch(newFecState == 1 ? true : false);
+			int newRdcState = ikcp_rdc_check(kcp_);
+			if (newRdcState >= 0)
+				rdc_.Switch(newRdcState == 1 ? true : false);
 			int result = FlushSndQueueBeforeConned();
 			if (result < 0)
 				return result;
@@ -1208,7 +1210,7 @@ private:
 	ConnectionStateE curConnState_;
 	Buf outputBuf_;
 	Buf inputBuf_;
-	CurrentTimestampMsFunc curTsMsFunc_;
+	CurrentTimestampMsFunction curTsMsFunc_;
 	IUINT32 conv_;
 	RoleTypeE role_;
 	std::deque<std::string> pendingSndDataDeque_;
