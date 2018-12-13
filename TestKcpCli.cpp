@@ -4,20 +4,20 @@
 #include <string.h>
 
 #ifndef _WIN32 
-	#include <sys/socket.h>
-	#include <netinet/in.h>
-	#include <arpa/inet.h>
-	#include <sys/time.h>
-	#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <sys/time.h>
+#include <unistd.h>
 #else
-	#include <WinSock2.h>
-	#include <WS2tcpip.h>
-	#include <time.h>
+#include <WinSock2.h>
+#include <WS2tcpip.h>
+#include <time.h>
 #endif
 
 #include "kcpp.h"
 
-#define SERVER_PORT 6666
+#define SERVER_PORT 8888
 
 // if u modify this `TEST_APPLICATION_LEVEL_CONGESTION_CONTROL`,
 // u have to update this var of the server side to have the same value.
@@ -68,17 +68,20 @@ IUINT32 iclock()
 	return (IUINT32)(value & 0xfffffffful);
 }
 
-void udp_output(const void *buf, int len, int fd, struct sockaddr* dst)
-{
-	::sendto(fd, (const char*)buf, len, 0, dst, sizeof(*dst));
-}
+//void udp_output(const void *buf, int len, int fd, struct sockaddr* dst)
+//{
+//	::sendto(fd, (const char*)buf, len, 0, dst, sizeof(*dst));
+//}
 
-kcpp::UserInputData udp_input(char *buf, int len, int fd, struct sockaddr_in from)
+int fd = 0;
+struct sockaddr* dstAddr = nullptr;
+int udp_output(const char *buf, int len, ikcpcb *kcp, void *user)
 {
-	socklen_t fromAddrLen = sizeof(from);
-	int recvLen = ::recvfrom(fd, buf, len, 0,
-		(struct sockaddr*)&from, &fromAddrLen);
-	return kcpp::UserInputData(buf, recvLen);
+	//union { int id; void *ptr; } parameter;
+	//parameter.ptr = user;
+	//vnet->send(parameter.id, buf, len);
+	::sendto(fd, buf, len, 0, dstAddr, sizeof(*dstAddr));
+	return 0;
 }
 
 void error_pause()
@@ -89,6 +92,7 @@ void error_pause()
 
 void udp_msg_sender(int fd, struct sockaddr* dst)
 {
+	dstAddr = dst;
 	char sndBuf[SND_BUFF_LEN];
 	char rcvBuf[RCV_BUFF_LEN];
 
@@ -101,24 +105,33 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 	uint32_t nextSndIndex = initIndex;
 	int64_t nextKcppUpdateTs = 0;
 
-	KcpSession kcppClient(
-		kcpp::RoleTypeE::kCli,
-		std::bind(udp_output, std::placeholders::_1, std::placeholders::_2, fd, dst),
-		std::bind(udp_input, rcvBuf, RCV_BUFF_LEN, fd, std::ref(from)),
-		std::bind(iclock));
+	//KcpSession kcppClient(
+	//	kcpp::RoleTypeE::kCli,
+	//	std::bind(udp_output, std::placeholders::_1, std::placeholders::_2, fd, dst),
+	//	std::bind(udp_input, rcvBuf, RCV_BUFF_LEN, fd, std::ref(from)),
+	//	std::bind(iclock));
+
+	ikcpcb *kcpCli = ikcp_create(0x11223344, (void*)0);
+	kcpCli->output = udp_output;
 
 
 #if TEST_APPLICATION_LEVEL_CONGESTION_CONTROL
 
 	const uint32_t testPassIndex = 66666;
-	kcppClient.SetConfig(666, 1024, 1024, 4096, 1, 1, 1, 1, 0, 5);
-
+	//kcppClient.SetConfig(111, 1024, 1024, 4096, 1, 1, 1, 1, 0, 5);
+	ikcp_wndsize(kcpCli, 1024, 1024);
+	ikcp_nodelay(kcpCli, 1, 1, 1, 1);
+	ikcp_setmtu(kcpCli, 548);
+	kcpCli->stream = 0;
+	kcpCli->rx_minrto = 5;
+	int waitSndCntLimit = 4096;
 	while (1)
 	{
 
 #else
 
 	const uint32_t testPassIndex = 666;
+	int waitSndCntLimit = 512;
 	while (1)
 	{
 	#ifndef _WIN32
@@ -129,36 +142,61 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 
 #endif // TEST_APPLICATION_LEVEL_CONGESTION_CONTROL
 
+		IUINT32 now = iclock();
+		if (static_cast<int64_t>(now) >= nextKcppUpdateTs)
+		{
+			//nextKcppUpdateTs = kcppClient.Update();
+			ikcp_update(kcpCli, now);
+			nextKcppUpdateTs = static_cast<int64_t>(ikcp_check(kcpCli, now));
+		}
 
-		if (static_cast<int64_t>(iclock()) >= nextKcppUpdateTs)
-			nextKcppUpdateTs = kcppClient.Update();
-
-		if (kcppClient.CheckCanSend())
+		//if (kcppClient.CheckCanSend())
+		if (ikcp_waitsnd(kcpCli) < waitSndCntLimit)
 		{
 			memset(sndBuf, 0, SND_BUFF_LEN);
 			((uint32_t*)sndBuf)[0] = nextSndIndex++;
 
-			len = kcppClient.Send(sndBuf, SND_BUFF_LEN);
+			//len = kcppClient.Send(sndBuf, SND_BUFF_LEN);
+			len = ikcp_send(kcpCli, sndBuf, SND_BUFF_LEN);
 			if (len < 0)
 			{
 				printf("kcpSession Send failed\n");
 				error_pause();
 				return;
 			}
+			ikcp_update(kcpCli, now);
 		}
 
-		while (kcppClient.Recv(&kcppRcvBuf, len))
+		//while (kcppClient.Recv(&kcppRcvBuf, len))
+
+		socklen_t fromAddrLen = sizeof(from);
+		memset(rcvBuf, 0, RCV_BUFF_LEN);
+		int recvLen = ::recvfrom(fd, rcvBuf, RCV_BUFF_LEN, 0,
+			(struct sockaddr*)&from, &fromAddrLen);
+
+		if (recvLen > 0)
 		{
-			if (len < 0)
+			int result = ikcp_input(kcpCli, rcvBuf, recvLen);
+			if (result == 0)
+			{
+				ikcp_update(kcpCli, now);
+			}
+			else
 			{
 				printf("kcpSession Recv failed, Recv() = %d \n", len);
 				error_pause();
 				return;
 			}
-			else if (len > 0)
+		}
+
+		int msgLen = ikcp_peeksize(kcpCli);
+		while (msgLen > 0)
+		{
+			memset(rcvBuf, 0, RCV_BUFF_LEN);
+			if (msgLen > 0)
 			{
-				uint32_t srvRcvMaxIndex = *(uint32_t*)(kcppRcvBuf.peek() + 0);
-				kcppRcvBuf.retrieveAll();
+				ikcp_recv(kcpCli, rcvBuf, msgLen);
+				uint32_t srvRcvMaxIndex = *(uint32_t*)(rcvBuf);
 				printf("unreliable msg from server: have recieved the max index = %d\n", (int)srvRcvMaxIndex);
 				if (srvRcvMaxIndex >= testPassIndex)
 				{
@@ -166,15 +204,15 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 					return;
 				}
 			}
-		}
 
+			msgLen = ikcp_peeksize(kcpCli);
+		}
 	}
 }
 
 
 int main(int argc, char* argv[])
 {
-	int client_fd;
 	struct sockaddr_in ser_addr;
 
 #ifdef _WIN32
@@ -187,8 +225,8 @@ int main(int argc, char* argv[])
 	}
 #endif
 
-	client_fd = socket(AF_INET, SOCK_DGRAM, 0);
-	if (client_fd < 0)
+	fd = socket(AF_INET, SOCK_DGRAM, 0);
+	if (fd < 0)
 	{
 		printf("create socket fail!\n");
 		return -1;
@@ -197,12 +235,12 @@ int main(int argc, char* argv[])
 #ifndef _WIN32
 	// set socket non-blocking
 	{
-		int flags = fcntl(client_fd, F_GETFL, 0);
-		fcntl(client_fd, F_SETFL, flags | O_NONBLOCK);
+		int flags = fcntl(fd, F_GETFL, 0);
+		fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 	}
 #else
-	unsigned long flags = 1; /* è¿™é‡Œæ ¹æ®éœ€è¦è®¾ç½®æˆ0æˆ–1 */
-	ioctlsocket(client_fd, FIONBIO, &flags);
+	unsigned long flags = 1; /* ÕâÀï¸ù¾ÝÐèÒªÉèÖÃ³É0»ò1 */
+	ioctlsocket(fd, FIONBIO, &flags);
 #endif
 
 	memset(&ser_addr, 0, sizeof(ser_addr));
@@ -210,12 +248,12 @@ int main(int argc, char* argv[])
 	ser_addr.sin_addr.s_addr = inet_addr(SERVER_IP);
 	ser_addr.sin_port = htons(SERVER_PORT);
 
-	udp_msg_sender(client_fd, (struct sockaddr*)&ser_addr);
+	udp_msg_sender(fd, (struct sockaddr*)&ser_addr);
 
 #ifndef _WIN32
-	close(client_fd);
+	close(fd);
 #else
-	closesocket(client_fd);
+	closesocket(fd);
 #endif // !_WIN32
 
 	return 0;

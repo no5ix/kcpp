@@ -894,7 +894,7 @@ public:
 		hasDataLeft_(false),
 		sndWnd_(128),
 		rcvWnd_(128),
-		maxWaitSndCount_(2 * sndWnd_),
+		waitSndCntLimit_(2 * sndWnd_),
 		nodelay_(1),
 		interval_(10),
 		resend_(1),
@@ -913,8 +913,8 @@ public:
 	// for Application-level Congestion Control
 	bool CheckCanSend() const
 	{
-		return (kcp_ ? ikcp_waitsnd(kcp_) < maxWaitSndCount_ : true)
-			&& (static_cast<int>(pendingSndDataDeque_.size()) < maxWaitSndCount_);
+		return (kcp_ ? ikcp_waitsnd(kcp_) < waitSndCntLimit_ : true)
+			&& (static_cast<int>(pendingSndDataDeque_.size()) < waitSndCntLimit_);
 	}
 
 	// returns below zero for error
@@ -949,7 +949,7 @@ public:
 	{
 		assert(waitSndCntLimit > sndWnd);
 		rdc_.SetMTU(mtu);
-		sndWnd_ = sndWnd; rcvWnd_ = rcvWnd; maxWaitSndCount_ = waitSndCntLimit;
+		sndWnd_ = sndWnd; rcvWnd_ = rcvWnd; waitSndCntLimit_ = waitSndCntLimit;
 		nodelay_ = nodelay; interval_ = interval; resend_ = resend;
 		nc_ = nc; streamMode_ = streamMode; rx_minrto_ = rx_minrto;
 	}
@@ -1241,7 +1241,7 @@ private:
 	// kcp config...
 	int sndWnd_;
 	int rcvWnd_;
-	int maxWaitSndCount_;
+	int waitSndCntLimit_;
 	int nodelay_;
 	int interval_;
 	int resend_;
