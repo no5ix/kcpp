@@ -23,11 +23,12 @@
 // u have to update this var of the server side to have the same value.
 #define TEST_APPLICATION_LEVEL_CONGESTION_CONTROL 1
 
-#define SND_BUFF_LEN 1500
+#define SND_BUFF_LEN 100
 #define RCV_BUFF_LEN 1500
 
 // #define SERVER_IP "172.96.239.56"
 #define SERVER_IP "127.0.0.1"
+//#define SERVER_IP "192.168.46.125"
 
 using kcpp::KcpSession;
 
@@ -80,7 +81,11 @@ kcpp::UserInputData udp_input(char *buf, int len, int fd, struct sockaddr_in fro
 	return kcpp::UserInputData(buf, recvLen);
 }
 
-
+void error_pause()
+{
+	printf("press any key to quit ...\n");
+	char ch; scanf("%c", &ch);
+}
 
 void udp_msg_sender(int fd, struct sockaddr* dst)
 {
@@ -94,12 +99,14 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 	int len = 0;
 	uint32_t initIndex = 11;
 	uint32_t nextSndIndex = initIndex;
+	int64_t nextKcppUpdateTs = 0;
 
 	KcpSession kcppClient(
 		kcpp::RoleTypeE::kCli,
 		std::bind(udp_output, std::placeholders::_1, std::placeholders::_2, fd, dst),
 		std::bind(udp_input, rcvBuf, RCV_BUFF_LEN, fd, std::ref(from)),
 		std::bind(iclock));
+
 
 #if TEST_APPLICATION_LEVEL_CONGESTION_CONTROL
 
@@ -122,7 +129,10 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 
 #endif // TEST_APPLICATION_LEVEL_CONGESTION_CONTROL
 
-		kcppClient.Update();
+
+		if (static_cast<int64_t>(iclock()) >= nextKcppUpdateTs)
+			nextKcppUpdateTs = kcppClient.Update();
+
 		if (kcppClient.CheckCanSend())
 		{
 			memset(sndBuf, 0, SND_BUFF_LEN);
@@ -132,6 +142,7 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 			if (len < 0)
 			{
 				printf("kcpSession Send failed\n");
+				error_pause();
 				return;
 			}
 		}
@@ -141,6 +152,7 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 			if (len < 0)
 			{
 				printf("kcpSession Recv failed, Recv() = %d \n", len);
+				error_pause();
 				return;
 			}
 			else if (len > 0)

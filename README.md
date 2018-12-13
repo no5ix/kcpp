@@ -43,7 +43,8 @@ kcpp::KcpSession myKcpSess(
     std::bind(timer));
 
 while (!isGameOver)
-    myKcpSess.Update()
+	if (now >= nextKcppUpdateTs)
+		nextKcppUpdateTs = myKcpSess.Update();
 
     while (myKcpSess.Recv(data, len))
         if (len > 0)

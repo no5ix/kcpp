@@ -24,7 +24,6 @@ using kcpp::KcpSession;
 #define SERVER_PORT 8888
 
 #define SND_BUFF_LEN 8465
-
 #define RCV_BUFF_LEN 1500
 
 // if u modify this `TEST_APPLICATION_LEVEL_CONGESTION_CONTROL`,
@@ -103,6 +102,12 @@ kcpp::UserInputData udp_input(char* buf, int len, int fd, struct sockaddr_in* fr
 	return kcpp::UserInputData(buf, recvLen);
 }
 
+void error_pause()
+{
+	printf("press any key to quit ...\n");
+	char ch; scanf("%c", &ch);
+}
+
 void handle_udp_msg(int fd)
 {
 	char sndBuf[SND_BUFF_LEN];
@@ -117,6 +122,7 @@ void handle_udp_msg(int fd)
 	int len = 0;
 	uint32_t rcvedIndex = 0;
 	IUINT32 startTs = 0;
+	int64_t nextKcppUpdateTs = 0;
 
 	KcpSession kcppServer(
 		kcpp::RoleTypeE::kSrv,
@@ -139,12 +145,15 @@ void handle_udp_msg(int fd)
 
 	while (1)
 	{
-		kcppServer.Update();
+		if (static_cast<int64_t>(iclock()) >= nextKcppUpdateTs)
+			nextKcppUpdateTs = kcppServer.Update();
+
 		while (kcppServer.Recv(&kcppRcvBuf, len))
 		{
 			if (len < 0 && !isSimulatingPackageLoss)
 			{
 				printf("kcpSession Recv failed, Recv() = %d \n", len);
+				error_pause();
 				return;
 			}
 			else if (len > 0)
@@ -167,6 +176,7 @@ void handle_udp_msg(int fd)
 					// 如果收到的包不连续
 					printf("ERROR index != nextRcvIndex : %d != %d, kcpServer.IsKcpConnected() = %d\n",
 						(int)rcvedIndex, (int)nextRcvIndex, (kcppServer.IsConnected() ? 1 : 0));
+					error_pause();
 					return;
 				}
 				++nextRcvIndex;
@@ -174,10 +184,11 @@ void handle_udp_msg(int fd)
 				memset(sndBuf, 0, SND_BUFF_LEN);
 				((uint32_t*)sndBuf)[0] = nextRcvIndex - 1;
 				int result = kcppServer.Send(sndBuf, SND_BUFF_LEN, kcpp::TransmitModeE::kUnreliable);
-				//int result = kcpServer.Send(sndBuf, SND_BUFF_LEN);
+				//int result = kcppServer.Send(sndBuf, SND_BUFF_LEN);
 				if (result < 0)
 				{
 					printf("kcpSession Send failed\n");
+					error_pause();
 					return;
 				}
 			}

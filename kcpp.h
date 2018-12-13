@@ -566,10 +566,14 @@ struct UserInputData
 	int len_;
 };
 
+class KcpSession;
+typedef std::shared_ptr<KcpSession> KcpSessionPtr;
+
 typedef std::function<void(const void* pendingSendData, int pendingSendDataLen)> UserOutputFunction;
 typedef std::function<UserInputData()> UserInputFunction;
-typedef std::function<int()> CurrentTimestampMsFunction;
+typedef std::function<int64_t()> CurrentTimestampMsFunction;
 typedef std::function<void(std::deque<std::string>* pendingSendDataDeque)> KcpSessionConnectionCallback;
+
 enum TransmitModeE { kUnreliable = 88, kReliable };
 enum RoleTypeE { kSrv, kCli };
 enum ConnectionStateE { kConnecting, kConnected, kResetting, kReset };
@@ -645,9 +649,9 @@ public:
 		int8_t rcvFrg = 0;
 		int16_t dataLen = 0;
 
-		bool hasData = ParsePkt(iBuf, pktType, rcvSn, rcvFrgCnt, rcvFrg, dataLen);
+		bool hasDataLeftThisRound = ParsePkt(iBuf, pktType, rcvSn, rcvFrgCnt, rcvFrg, dataLen);
 
-		if (hasData)
+		if (hasDataLeftThisRound)
 		{
 			auto discardRcvedData = [&]() { iBuf->retrieve(dataLen); len = 0; };
 			isThisRoundFinished_ = false;
@@ -705,13 +709,13 @@ public:
 					discardRcvedData();
 			}
 		}
-		else if (!hasData)
+		else if (!hasDataLeftThisRound)
 		{
 			iBuf->retrieveAll();
 			isThisRoundFinished_ = true;
 			len = 0;
 		}
-		return hasData;
+		return hasDataLeftThisRound;
 	}
 
 	bool IsThisRoundFinished() const { return isThisRoundFinished_; }
@@ -802,7 +806,7 @@ private:
 	bool ParsePkt(Buf* iBuf, PktTypeE &pktType, int32_t &rcvSn,
 		int8_t &rcvFrgCnt, int8_t &rcvFrg, int16_t &dataLen) const
 	{
-		bool hasData = false;
+		bool hasDataLeftThisRound = false;
 		if (iBuf->readableBytes() >= kPktTypeLen + kSnLen + kDataLen)
 		{
 			pktType = static_cast<PktTypeE>(iBuf->readInt8());
@@ -821,7 +825,7 @@ private:
 							curDataLenLimit = kUnreliableDataLenLimit + kFrgLen;
 					}
 					if (dataLen <= static_cast<int16_t>(curDataLenLimit))
-						hasData = iBuf->readableBytes() >= static_cast<size_t>(dataLen);
+						hasDataLeftThisRound = iBuf->readableBytes() >= static_cast<size_t>(dataLen);
 				}};
 			if (pktType == static_cast<PktTypeE>(kUnreliable))
 			{
@@ -837,7 +841,7 @@ private:
 			else
 				checkDataLenFunc(kReliable);
 		}
-		return hasData;
+		return hasDataLeftThisRound;
 	}
 
 private:
@@ -869,8 +873,6 @@ private:
 
 
 
-class KcpSession;
-typedef std::shared_ptr<KcpSession> KcpSessionPtr;
 
 class KcpSession
 {
@@ -889,6 +891,7 @@ public:
 		rdc_(userOutputFunc, std::bind(&KcpSession::DoRecv, this, std::placeholders::_1,
 			std::placeholders::_2, std::placeholders::_3, std::placeholders::_4)),
 		nextUpdateTs_(0),
+		hasDataLeft_(false),
 		sndWnd_(128),
 		rcvWnd_(128),
 		maxWaitSndCount_(2 * sndWnd_),
@@ -919,7 +922,7 @@ public:
 	{ return SendImpl(data, len, transmitMode); }
 
 	// update then returns next update timestamp in ms or returns below zero for error
-	int Update() { return UpdateImpl(); }
+	int64_t Update() { return UpdateImpl(); }
 
 	// returns Is-Any-Data-Left, len below zero for error
 	bool Recv(Buf* userBuf, int& len) { return RecvImpl(userBuf, len); }
@@ -955,7 +958,7 @@ public:
 
 private:
 
-	int UpdateImpl()
+	int64_t UpdateImpl()
 	{
 		if (curConnState_ == kConnecting && IsClient())
 			SendSyn();
@@ -974,10 +977,10 @@ private:
 				ikcp_update(kcp_, curTimestamp);
 				nextUpdateTs_ = ikcp_check(kcp_, curTimestamp);
 			}
-			return static_cast<int>(nextUpdateTs_);
+			return static_cast<int64_t>(nextUpdateTs_);
 		}
 		else // not yet connected
-			return static_cast<int>(curTimestamp) + interval_;
+			return static_cast<int64_t>(curTimestamp) + interval_;
 	}
 
 	int SendImpl(const void* data, int len, TransmitModeE transmitMode = kReliable)
@@ -1008,7 +1011,7 @@ private:
 				if (result < 0)
 					return result; // ikcp_send err
 				else
-					ikcp_update(kcp_, curTsMsFunc_());
+					ikcp_update(kcp_, static_cast<IUINT32>(curTsMsFunc_()));
 			}
 		}
 		return 0;
@@ -1016,17 +1019,32 @@ private:
 
 	bool RecvImpl(Buf* userBuf, int& len)
 	{
-		if (rdc_.IsThisRoundFinished())
+		if (hasDataLeft_)
 		{
-			const UserInputData& rawRecvdata = userInputFunc_();
-			if (rawRecvdata.len_ <= 0)
-			{
-				len = -10;
-				return false;
-			}
-			inputBuf_.append(rawRecvdata.data_, rawRecvdata.len_);
+			len = KcpRecv(userBuf); // if err, -1, -2, -3
+			hasDataLeft_ = len > 0;
+			return hasDataLeft_;
 		}
-		return rdc_.Input(userBuf, len, &inputBuf_);
+		else
+		{
+			if (rdc_.IsThisRoundFinished())
+			{
+				const UserInputData& rawRecvdata = userInputFunc_();
+				if (rawRecvdata.len_ < 0)
+				{
+					len = -10;
+					return false;
+				}
+				else if (rawRecvdata.len_ > 0)
+					inputBuf_.append(rawRecvdata.data_, rawRecvdata.len_);
+			}
+			else
+			{
+				hasDataLeft_ = true;
+			}
+			rdc_.Input(userBuf, len, &inputBuf_);
+			return true;
+		}
 	}
 
 	int FlushSndQueueBeforeConned()
@@ -1039,7 +1057,7 @@ private:
 				int sendRet = ikcp_send(kcp_, it->c_str(), static_cast<int>(it->size()));
 				if (sendRet < 0)
 					return sendRet; // ikcp_send err
-				ikcp_update(kcp_, curTsMsFunc_());
+				ikcp_update(kcp_, static_cast<IUINT32>(curTsMsFunc_()));
 			}
 			pendingSndDataDeque_.clear();
 		}
@@ -1111,8 +1129,8 @@ private:
 				int result = ikcp_input(kcp_, inputBuf_.peek(), readableLen);
 				if (result == 0)
 				{
-					ikcp_update(kcp_, curTsMsFunc_());
-					len = KcpRecv(userBuf); // if err, -1, -2, -3
+					ikcp_update(kcp_, static_cast<IUINT32>(curTsMsFunc_()));
+					len = 0;
 				}
 				else // if (result < 0)
 					len = result - 3; // ikcp_input err, -4, -5, -6
@@ -1217,6 +1235,7 @@ private:
 	Rdc rdc_;
 	IUINT32 nextUpdateTs_;
 	KcpSessionConnectionCallback connectionCallback_;
+	bool hasDataLeft_;
 
 private:
 	// kcp config...
