@@ -761,9 +761,6 @@ private:
 
 	void HandleDynamicRdc(Buf* oBuf, const std::string& pendingSndData)
 	{
-		PrependPrePktAndFlush(oBuf); return;
-
-
 		if (on_)
 			PrependPrePktAndFlush(oBuf);
 		else
