@@ -120,6 +120,7 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 
 #else
 
+	//kcppClient.SetConfig(1500, 32, 128, 128, 0, 100, 2, 0, 0, 100);
 	static const int64_t kSendInterval = 33; // 30fps
 	const uint32_t testPassIndex = 666;
 	while (1)
@@ -166,7 +167,6 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 				}
 			}
 		}
-
 	}
 }
 

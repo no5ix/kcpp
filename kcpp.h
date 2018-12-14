@@ -649,7 +649,11 @@ public:
 		int8_t rcvFrg = 0;
 		int16_t dataLen = 0;
 
+		// printf("iBuf->readableBytes() = %d\n", (int)iBuf->readableBytes());
 		bool hasDataLeftThisRound = ParsePkt(iBuf, pktType, rcvSn, rcvFrgCnt, rcvFrg, dataLen);
+		// printf("rcvSn = %d\n", (int)rcvSn);
+		// printf("nextRcvSn_ = %d\n", (int)nextRcvSn_);
+		// printf("dataLen = %d\n", (int)dataLen);
 
 		if (hasDataLeftThisRound)
 		{
@@ -761,6 +765,8 @@ private:
 
 	void HandleDynamicRdc(Buf* oBuf, const std::string& pendingSndData)
 	{
+		// PrependPrePktAndFlush(oBuf); return;
+
 		if (on_)
 			PrependPrePktAndFlush(oBuf);
 		else
@@ -1022,6 +1028,9 @@ private:
 	{
 		if (hasDataLeft_)
 		{
+			assert(inputBuf_.readableBytes() == 0);
+			if (!IsConnected())
+				return false;
 			len = KcpRecv(userBuf); // if err, -1, -2, -3
 			hasDataLeft_ = len > 0;
 			return hasDataLeft_;
@@ -1039,11 +1048,8 @@ private:
 				else if (rawRecvdata.len_ > 0)
 					inputBuf_.append(rawRecvdata.data_, rawRecvdata.len_);
 			}
-			else
-			{
+			if (!rdc_.Input(userBuf, len, &inputBuf_))
 				hasDataLeft_ = true;
-			}
-			rdc_.Input(userBuf, len, &inputBuf_);
 			return true;
 		}
 	}

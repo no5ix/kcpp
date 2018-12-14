@@ -141,6 +141,7 @@ void handle_udp_msg(int fd)
 
 #else
 
+	//kcppServer.SetConfig(1500, 32, 128, 128, 0, 100, 2, 0, 0, 100);
 	static const int64_t kSendInterval = 50; // 20fps
 	const uint32_t testPassIndex = 666;
 

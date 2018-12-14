@@ -164,9 +164,11 @@ void handle_udp_msg(int fd)
 	// equal to kcpp default config
 	ikcp_wndsize(kcpSrv, 128, 128);
 	ikcp_nodelay(kcpSrv, 1, 10, 1, 1);
-	ikcp_setmtu(kcpSrv, 548);
 	kcpSrv->stream = 0;
 	kcpSrv->rx_minrto = 10;
+
+	ikcp_setmtu(kcpSrv, 548);
+
 	static const int64_t kSendInterval = 50; // 20fps
 	const uint32_t testPassIndex = 666;
 
