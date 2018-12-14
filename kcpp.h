@@ -761,6 +761,9 @@ private:
 
 	void HandleDynamicRdc(Buf* oBuf, const std::string& pendingSndData)
 	{
+		PrependPrePktAndFlush(oBuf); return;
+
+
 		if (on_)
 			PrependPrePktAndFlush(oBuf);
 		else
@@ -900,8 +903,8 @@ public:
 		waitSndCntLimit_(4 * sndWnd_),
 		nodelay_(1),
 		interval_(10),
-		resend_(1),
-		nc_(1),
+		fastresend_(1),
+		nocwnd_(1),
 		streamMode_(0),
 		mtu_(548),
 		rx_minrto_(10)
@@ -947,14 +950,14 @@ public:
 
 	// should set before Send()
 	void SetConfig(const int mtu = 555, const int sndWnd = 128, const int rcvWnd = 128,
-		const int waitSndCntLimit = 512, const int nodelay = 1, const int interval = 10, const int resend = 1,
-		const int nc = 1, const int streamMode = 0, const int rx_minrto = 10)
+		const int waitSndCntLimit = 512, const int nodelay = 1, const int interval = 10, const int fastresend = 1,
+		const int nocwnd = 1, const int streamMode = 0, const int rx_minrto = 10)
 	{
 		assert(waitSndCntLimit > sndWnd);
 		rdc_.SetMTU(mtu);
 		sndWnd_ = sndWnd; rcvWnd_ = rcvWnd; waitSndCntLimit_ = waitSndCntLimit;
-		nodelay_ = nodelay; interval_ = interval; resend_ = resend;
-		nc_ = nc; streamMode_ = streamMode; rx_minrto_ = rx_minrto;
+		nodelay_ = nodelay; interval_ = interval; fastresend_ = fastresend;
+		nocwnd_ = nocwnd; streamMode_ = streamMode; rx_minrto_ = rx_minrto;
 	}
 
 	~KcpSession() { if (kcp_) ikcp_release(kcp_); }
@@ -1174,7 +1177,7 @@ private:
 		conv_ = conv;
 		kcp_ = ikcp_create(conv, this);
 		ikcp_wndsize(kcp_, sndWnd_, rcvWnd_);
-		ikcp_nodelay(kcp_, nodelay_, interval_, resend_, nc_);
+		ikcp_nodelay(kcp_, nodelay_, interval_, fastresend_, nocwnd_);
 		ikcp_setmtu(kcp_, mtu_);
 		kcp_->stream = streamMode_;
 		kcp_->rx_minrto = rx_minrto_;
@@ -1245,8 +1248,8 @@ private:
 	int waitSndCntLimit_;
 	int nodelay_;
 	int interval_;
-	int resend_;
-	int nc_;
+	int fastresend_;
+	int nocwnd_;
 	int streamMode_;
 	int mtu_;
 	int rx_minrto_;

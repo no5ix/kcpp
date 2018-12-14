@@ -138,6 +138,7 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 	ikcp_setmtu(kcpCli, 548);
 	kcpCli->stream = 0;
 	kcpCli->rx_minrto = 10;
+
 	static const int64_t kSendInterval = 33; // 30fps
 	const uint32_t testPassIndex = 666;
 	int waitSndCntLimit = 512;
