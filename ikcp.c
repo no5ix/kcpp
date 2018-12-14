@@ -22,6 +22,7 @@
 //=====================================================================
 const IUINT32 IKCP_RDC_CHK_INTERVAL = 100;
 const IUINT32 IKCP_RDC_RTT_LIMIT = 111;
+const IUINT32 IKCP_RDC_CLOSE_TRY_THRESHOLD = 26;
 const IUINT32 IKCP_RDC_LOSS_RATE_LIMIT = 5;
 
 const IUINT32 IKCP_RTO_NDL = 30;		// no delay min rto
@@ -246,6 +247,9 @@ ikcpcb* ikcp_create(IUINT32 conv, void *user)
 	kcp->rdc_check_ts = 0;
 	kcp->rdc_check_interval = IKCP_RDC_CHK_INTERVAL;
 	kcp->rdc_rtt_limit = IKCP_RDC_RTT_LIMIT;
+	kcp->is_rdc_on = 0;
+	kcp->rdc_close_try_times = 0;
+	kcp->rdc_close_try_threshold = IKCP_RDC_CLOSE_TRY_THRESHOLD;
 	kcp->snd_sum = 0;
 	kcp->timeout_resnd_cnt = 0;
 	kcp->loss_rate = 0;
@@ -1421,21 +1425,24 @@ void ikcp_flush(ikcpcb *kcp)
 	}
 }
 
-// return -1 for keep rdc, 0 for close, 1 for open
+// return rdc state; 0 for close, 1 for open
 int ikcp_rdc_check(ikcpcb *kcp)
 {
 	IINT32 slap = _itimediff(kcp->current, kcp->rdc_check_ts);
 	if (slap < 0 && slap > -10000)
-		return -1;
+		return kcp->is_rdc_on;
 	kcp->rdc_check_ts= kcp->current + kcp->rdc_check_interval;
 	if (kcp->snd_sum > 0)
 		kcp->loss_rate = (int)(1.0 * kcp->timeout_resnd_cnt / kcp->snd_sum * 100);
 	kcp->timeout_resnd_cnt = 0;
 	kcp->snd_sum = 0;
-	if (kcp->loss_rate >= kcp->rdc_loss_rate_limit && kcp->rx_srtt >= kcp->rdc_rtt_limit)
-		return 1;
-	else
-		return 0;
+	if (!kcp->is_rdc_on && kcp->loss_rate >= kcp->rdc_loss_rate_limit && kcp->rx_srtt >= kcp->rdc_rtt_limit)
+		kcp->is_rdc_on = 1;
+	else if (kcp->is_rdc_on && (kcp->loss_rate < kcp->rdc_loss_rate_limit || kcp->rx_srtt < kcp->rdc_rtt_limit)
+			&& (++kcp->rdc_close_try_times >= kcp->rdc_close_try_threshold))
+		kcp->is_rdc_on = 0;
+
+	return kcp->is_rdc_on;
 }
 
 //---------------------------------------------------------------------

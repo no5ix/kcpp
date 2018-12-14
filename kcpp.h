@@ -768,6 +768,9 @@ private:
 			oBuf->prepend(pendingSndData);
 			FlushOutputBuffer(oBuf);
 
+			if (pendingSndData.size() >= mss_)
+				outputPktDeque_.pop_back();
+
 			size_t sumPktLen = 0;
 			for (auto it = outputPktDeque_.end() - 1; it != outputPktDeque_.begin(); --it)
 			{
@@ -793,11 +796,11 @@ private:
 			if (!isFront)
 				prePktDataLen = (curIt - 1)->size();
 
-			if (oBuf->readableBytes() + prePktDataLen >= mss_ || isFront)
+			if ((oBuf->readableBytes() + prePktDataLen >= mss_) || isFront)
 			{
-				FlushOutputBuffer(oBuf);
 				if (oBuf->readableBytes() + prePktDataLen >= mss_)
 					outputPktDeque_.erase(outputPktDeque_.begin(), curIt);
+				FlushOutputBuffer(oBuf);
 				break;
 			}
 		}
@@ -894,7 +897,7 @@ public:
 		hasDataLeft_(false),
 		sndWnd_(128),
 		rcvWnd_(128),
-		waitSndCntLimit_(2 * sndWnd_),
+		waitSndCntLimit_(4 * sndWnd_),
 		nodelay_(1),
 		interval_(10),
 		resend_(1),
@@ -966,9 +969,7 @@ private:
 		IUINT32 curTimestamp = static_cast<IUINT32>(curTsMsFunc_());
 		if (kcp_ && IsConnected())
 		{
-			int newRdcState = ikcp_rdc_check(kcp_);
-			if (newRdcState >= 0)
-				rdc_.Switch(newRdcState == 1 ? true : false);
+			rdc_.Switch(ikcp_rdc_check(kcp_) == 1 ? true : false);
 			int result = FlushSndQueueBeforeConned();
 			if (result < 0)
 				return result;

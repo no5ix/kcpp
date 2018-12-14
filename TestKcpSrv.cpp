@@ -94,7 +94,7 @@ int udp_output(const char *buf, int len, ikcpcb *kcp, void *user)
 }
 
 bool isSimulatingPackageLoss = false;
-float kSimulatePackageLossRate = 0.2f; // simulate package loss rate 20%
+float kSimulatePackageLossRate = 0.3f; // simulate package loss rate 30%
 //kcpp::UserInputData udp_input(char* buf, int len, int fd, struct sockaddr_in* from)
 //{
 //	socklen_t fromAddrLen = sizeof(*from);
@@ -161,6 +161,12 @@ void handle_udp_msg(int fd)
 
 #else
 
+	// equal to kcpp default config
+	ikcp_wndsize(kcpSrv, 128, 128);
+	ikcp_nodelay(kcpSrv, 1, 10, 1, 1);
+	ikcp_setmtu(kcpSrv, 548);
+	kcpSrv->stream = 0;
+	kcpSrv->rx_minrto = 10;
 	static const int64_t kSendInterval = 50; // 20fps
 	const uint32_t testPassIndex = 666;
 
@@ -224,8 +230,11 @@ void handle_udp_msg(int fd)
 					startTs = iclock();
 
 				if (rcvedIndex == testPassIndex)
-					printf("\n test passes, yay! \n simulate package loss rate %f %% \n cost %f secs \n now u can close me ...\n",
-					(kSimulatePackageLossRate * 100.f), (1.0 * (iclock() - startTs) / 1000));
+					printf("\n test passes, yay! \n simulate package loss rate %f %% \n"
+						" avg rtt %d ms \n cost %f secs \n"
+						" now u can close me ...\n",
+						(kSimulatePackageLossRate * 100.f), kcpSrv->rx_srtt,
+						(1.0 * (iclock() - startTs) / 1000));
 
 				if (rcvedIndex != nextRcvIndex)
 				{

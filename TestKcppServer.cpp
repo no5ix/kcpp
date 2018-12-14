@@ -82,7 +82,7 @@ void udp_output(const void *buf, int len, int fd, struct sockaddr_in* dst)
 }
 
 bool isSimulatingPackageLoss = false;
-float kSimulatePackageLossRate = 0.2f; // simulate package loss rate 20%
+float kSimulatePackageLossRate = 0.3f; // simulate package loss rate 30%
 kcpp::UserInputData udp_input(char* buf, int len, int fd, struct sockaddr_in* from)
 {
 	socklen_t fromAddrLen = sizeof(*from);
@@ -172,8 +172,11 @@ void handle_udp_msg(int fd)
 					startTs = iclock();
 
 				if (rcvedIndex == testPassIndex)
-					printf("\n test passes, yay! \n simulate package loss rate %f %% \n cost %f secs \n now u can close me ...\n",
-						(kSimulatePackageLossRate * 100.f), (1.0 * (iclock() - startTs) / 1000));
+					printf("\n test passes, yay! \n simulate package loss rate %f %% \n"
+						" avg rtt %d ms \n cost %f secs \n"
+						" now u can close me ...\n",
+						(kSimulatePackageLossRate * 100.f), kcppServer.GetKcpInstance()->rx_srtt,
+						(1.0 * (iclock() - startTs) / 1000));
 
 				if (kcppServer.IsConnected() && rcvedIndex != nextRcvIndex)
 				{
