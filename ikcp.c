@@ -1425,7 +1425,7 @@ void ikcp_flush(ikcpcb *kcp)
 int ikcp_rdc_check(ikcpcb *kcp)
 {
 	IINT32 slap = _itimediff(kcp->current, kcp->rdc_check_ts);
-	if (slap < 0)
+	if (slap < 0 && slap > -10000)
 		return -1;
 	kcp->rdc_check_ts= kcp->current + kcp->rdc_check_interval;
 	if (kcp->snd_sum > 0)

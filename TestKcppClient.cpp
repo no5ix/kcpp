@@ -19,9 +19,9 @@
 
 #define SERVER_PORT 6666
 
-// if u modify this `TEST_APPLICATION_LEVEL_CONGESTION_CONTROL`,
+// if u modify this `PRACTICAL_CONDITION`,
 // u have to update this var of the server side to have the same value.
-#define TEST_APPLICATION_LEVEL_CONGESTION_CONTROL 0
+#define PRACTICAL_CONDITION 1
 
 #define SND_BUFF_LEN 200
 #define RCV_BUFF_LEN 1500
@@ -100,6 +100,7 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 	uint32_t initIndex = 11;
 	uint32_t nextSndIndex = initIndex;
 	int64_t nextKcppUpdateTs = 0;
+	int64_t nextSendTs = 0; 
 
 	KcpSession kcppClient(
 		kcpp::RoleTypeE::kCli,
@@ -108,8 +109,9 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 		std::bind(iclock));
 
 
-#if TEST_APPLICATION_LEVEL_CONGESTION_CONTROL
+#if !PRACTICAL_CONDITION
 
+	static const int64_t kSendInterval = 0;
 	const uint32_t testPassIndex = 66666;
 	kcppClient.SetConfig(666, 1024, 1024, 4096, 1, 1, 1, 1, 0, 5);
 
@@ -118,23 +120,20 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 
 #else
 
+	static const int64_t kSendInterval = 33; // 30fps
 	const uint32_t testPassIndex = 666;
 	while (1)
 	{
-	#ifndef _WIN32
-		usleep(16666); // 60fps
-	#else
-		Sleep(16666 / 1000);
-	#endif // !_WIN32
 
-#endif // TEST_APPLICATION_LEVEL_CONGESTION_CONTROL
+#endif // PRACTICAL_CONDITION
 
-
-		if (static_cast<int64_t>(iclock()) >= nextKcppUpdateTs)
+		int64_t now = static_cast<int64_t>(iclock());
+		if (now >= nextKcppUpdateTs)
 			nextKcppUpdateTs = kcppClient.Update();
 
-		if (kcppClient.CheckCanSend())
+		if (kcppClient.CheckCanSend() && now >= nextSendTs)
 		{
+			nextSendTs = now + kSendInterval;
 			memset(sndBuf, 0, SND_BUFF_LEN);
 			((uint32_t*)sndBuf)[0] = nextSndIndex++;
 
@@ -159,7 +158,7 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 			{
 				uint32_t srvRcvMaxIndex = *(uint32_t*)(kcppRcvBuf.peek() + 0);
 				kcppRcvBuf.retrieveAll();
-				printf("unreliable msg from server: have recieved the max index = %d\n", (int)srvRcvMaxIndex);
+				printf("msg from server: have recieved the max index = %d\n", (int)srvRcvMaxIndex);
 				if (srvRcvMaxIndex >= testPassIndex)
 				{
 					printf("test passes, yay! \n");

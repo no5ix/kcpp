@@ -26,9 +26,9 @@ using kcpp::KcpSession;
 #define SND_BUFF_LEN 200
 #define RCV_BUFF_LEN 1500
 
-// if u modify this `TEST_APPLICATION_LEVEL_CONGESTION_CONTROL`,
+// if u modify this `PRACTICAL_CONDITION`,
 // u have to update this var of the client side to have the same value.
-#define TEST_APPLICATION_LEVEL_CONGESTION_CONTROL 0
+#define PRACTICAL_CONDITION 1
 
 
 
@@ -95,24 +95,24 @@ int udp_output(const char *buf, int len, ikcpcb *kcp, void *user)
 
 bool isSimulatingPackageLoss = false;
 float kSimulatePackageLossRate = 0.2f; // simulate package loss rate 20%
-kcpp::UserInputData udp_input(char* buf, int len, int fd, struct sockaddr_in* from)
-{
-	socklen_t fromAddrLen = sizeof(*from);
-	int recvLen = ::recvfrom(fd, buf, len, 0,
-		(struct sockaddr*)from, &fromAddrLen);
-	if (recvLen > 0)
-	{
-		isSimulatingPackageLoss =
-			GetRandomFloatFromZeroToOne() < kSimulatePackageLossRate ? true : false;
-		if (isSimulatingPackageLoss)
-		{
-			//printf("server: simulate package loss!!\n");
-			buf = nullptr;
-			recvLen = 0;
-		}
-	}
-	return kcpp::UserInputData(buf, recvLen);
-}
+//kcpp::UserInputData udp_input(char* buf, int len, int fd, struct sockaddr_in* from)
+//{
+//	socklen_t fromAddrLen = sizeof(*from);
+//	int recvLen = ::recvfrom(fd, buf, len, 0,
+//		(struct sockaddr*)from, &fromAddrLen);
+//	if (recvLen > 0)
+//	{
+//		isSimulatingPackageLoss =
+//			GetRandomFloatFromZeroToOne() < kSimulatePackageLossRate ? true : false;
+//		if (isSimulatingPackageLoss)
+//		{
+//			//printf("server: simulate package loss!!\n");
+//			buf = nullptr;
+//			recvLen = 0;
+//		}
+//	}
+//	return kcpp::UserInputData(buf, recvLen);
+//}
 
 void error_pause()
 {
@@ -129,12 +129,14 @@ void handle_udp_msg(int fd)
 	kcpp::Buf kcppRcvBuf;
 
 	//struct sockaddr_in clientAddr;  //clent_addr用于记录发送方的地址信息
-	uint32_t initIndex = 11;
-	uint32_t nextRcvIndex = initIndex;
+	uint32_t kInitIndex = 11;
+	uint32_t nextRcvIndex = kInitIndex;
+	uint32_t curRcvIndex = kInitIndex;
 	int len = 0;
 	uint32_t rcvedIndex = 0;
 	IUINT32 startTs = 0;
 	int64_t nextKcppUpdateTs = 0;
+	int64_t nextSendTs = 0;
 
 	//KcpSession kcppServer(
 	//	kcpp::RoleTypeE::kSrv,
@@ -146,8 +148,9 @@ void handle_udp_msg(int fd)
 	ikcpcb *kcpSrv = ikcp_create(0x11223344, (void*)1);
 	kcpSrv->output = udp_output;
 
-#if TEST_APPLICATION_LEVEL_CONGESTION_CONTROL
+#if !PRACTICAL_CONDITION
 
+	static const int64_t kSendInterval = 0;
 	const uint32_t testPassIndex = 66666;
 	//kcppServer.SetConfig(111, 1024, 1024, 4096, 1, 1, 1, 1, 0, 5);
 	ikcp_wndsize(kcpSrv, 1024, 1024);
@@ -158,9 +161,10 @@ void handle_udp_msg(int fd)
 
 #else
 
+	static const int64_t kSendInterval = 50; // 20fps
 	const uint32_t testPassIndex = 666;
 
-#endif // TEST_APPLICATION_LEVEL_CONGESTION_CONTROL
+#endif // PRACTICAL_CONDITION
 
 
 	while (1)
@@ -186,9 +190,7 @@ void handle_udp_msg(int fd)
 			if (isSimulatingPackageLoss)
 			{
 				//printf("server: simulate package loss!!\n");
-				//buf = nullptr;
-				//recvLen = 0;
-				;
+				recvLen = 0;
 			}
 			else
 			{
@@ -218,7 +220,7 @@ void handle_udp_msg(int fd)
 				if (rcvedIndex <= testPassIndex)
 					printf("reliable msg from client: %d\n", (int)rcvedIndex);
 
-				if (rcvedIndex == initIndex)
+				if (rcvedIndex == kInitIndex)
 					startTs = iclock();
 
 				if (rcvedIndex == testPassIndex)
@@ -235,17 +237,6 @@ void handle_udp_msg(int fd)
 				}
 				++nextRcvIndex;
 
-				memset(sndBuf, 0, SND_BUFF_LEN);
-				((uint32_t*)sndBuf)[0] = nextRcvIndex - 1;
-				len = ikcp_send(kcpSrv, sndBuf, SND_BUFF_LEN);
-				if (len < 0)
-				{
-					printf("kcpSession Send failed\n");
-					error_pause();
-					return;
-				}
-				ikcp_update(kcpSrv, now);
-
 				msgLen = ikcp_peeksize(kcpSrv);
 				//int result = kcppServer.Send(sndBuf, SND_BUFF_LEN, kcpp::TransmitModeE::kUnreliable);
 				////int result = kcppServer.Send(sndBuf, SND_BUFF_LEN);
@@ -255,6 +246,24 @@ void handle_udp_msg(int fd)
 				//	error_pause();
 				//	return;
 				//}
+			}
+		}
+
+		if (now >= nextSendTs)
+		{
+			nextSendTs = now + kSendInterval;
+			while (curRcvIndex <= nextRcvIndex - 1)
+			{
+				memset(sndBuf, 0, SND_BUFF_LEN);
+				((uint32_t*)sndBuf)[0] = curRcvIndex++;
+				len = ikcp_send(kcpSrv, sndBuf, SND_BUFF_LEN);
+				if (len < 0)
+				{
+					printf("kcpSession Send failed\n");
+					error_pause();
+					return;
+				}
+				ikcp_update(kcpSrv, now);
 			}
 		}
 	}

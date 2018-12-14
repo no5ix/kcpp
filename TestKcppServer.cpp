@@ -26,9 +26,9 @@ using kcpp::KcpSession;
 #define SND_BUFF_LEN 200
 #define RCV_BUFF_LEN 1500
 
-// if u modify this `TEST_APPLICATION_LEVEL_CONGESTION_CONTROL`,
+// if u modify this `PRACTICAL_CONDITION`,
 // u have to update this var of the client side to have the same value.
-#define TEST_APPLICATION_LEVEL_CONGESTION_CONTROL 0
+#define PRACTICAL_CONDITION 1
 
 
 
@@ -117,12 +117,14 @@ void handle_udp_msg(int fd)
 	kcpp::Buf kcppRcvBuf;
 
 	struct sockaddr_in clientAddr;  //clent_addr用于记录发送方的地址信息
-	uint32_t initIndex = 11;
-	uint32_t nextRcvIndex = initIndex;
+	static const uint32_t kInitIndex = 11;
+	uint32_t nextRcvIndex = kInitIndex;
+	uint32_t curRcvIndex = kInitIndex;
 	int len = 0;
 	uint32_t rcvedIndex = 0;
 	IUINT32 startTs = 0;
 	int64_t nextKcppUpdateTs = 0;
+	int64_t nextSendTs = 0;
 
 	KcpSession kcppServer(
 		kcpp::RoleTypeE::kSrv,
@@ -131,21 +133,23 @@ void handle_udp_msg(int fd)
 		std::bind(iclock));
 
 
-#if TEST_APPLICATION_LEVEL_CONGESTION_CONTROL
+#if !PRACTICAL_CONDITION
 
+	static const int64_t kSendInterval = 0;
 	const uint32_t testPassIndex = 66666;
 	kcppServer.SetConfig(666, 1024, 1024, 4096, 1, 1, 1, 1, 0, 5);
 
 #else
-
+	static const int64_t kSendInterval = 50; // 20fps
 	const uint32_t testPassIndex = 666;
 
-#endif // TEST_APPLICATION_LEVEL_CONGESTION_CONTROL
+#endif // PRACTICAL_CONDITION
 
 
 	while (1)
 	{
-		if (static_cast<int64_t>(iclock()) >= nextKcppUpdateTs)
+		int64_t now = static_cast<int64_t>(iclock());
+		if (now >= nextKcppUpdateTs)
 			nextKcppUpdateTs = kcppServer.Update();
 
 		while (kcppServer.Recv(&kcppRcvBuf, len))
@@ -162,9 +166,9 @@ void handle_udp_msg(int fd)
 				kcppRcvBuf.retrieveAll();
 
 				if (rcvedIndex <= testPassIndex)
-					printf("reliable msg from client: %d\n", (int)rcvedIndex);
+					printf("msg from client: %d\n", (int)rcvedIndex);
 
-				if (rcvedIndex == initIndex)
+				if (rcvedIndex == kInitIndex)
 					startTs = iclock();
 
 				if (rcvedIndex == testPassIndex)
@@ -180,9 +184,16 @@ void handle_udp_msg(int fd)
 					return;
 				}
 				++nextRcvIndex;
+			}
+		}
 
+		if (now >= nextSendTs)
+		{
+			nextSendTs = now + kSendInterval;
+			while (curRcvIndex <= nextRcvIndex - 1)
+			{
 				memset(sndBuf, 0, SND_BUFF_LEN);
-				((uint32_t*)sndBuf)[0] = nextRcvIndex - 1;
+				((uint32_t*)sndBuf)[0] = curRcvIndex++;
 				//int result = kcppServer.Send(sndBuf, SND_BUFF_LEN, kcpp::TransmitModeE::kUnreliable);
 				int result = kcppServer.Send(sndBuf, SND_BUFF_LEN);
 				if (result < 0)
@@ -193,6 +204,7 @@ void handle_udp_msg(int fd)
 				}
 			}
 		}
+
 	}
 }
 

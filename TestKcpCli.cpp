@@ -19,9 +19,9 @@
 
 #define SERVER_PORT 8888
 
-// if u modify this `TEST_APPLICATION_LEVEL_CONGESTION_CONTROL`,
+// if u modify this `PRACTICAL_CONDITION`,
 // u have to update this var of the server side to have the same value.
-#define TEST_APPLICATION_LEVEL_CONGESTION_CONTROL 0
+#define PRACTICAL_CONDITION 1
 
 #define SND_BUFF_LEN 200
 #define RCV_BUFF_LEN 1500
@@ -104,6 +104,7 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 	uint32_t initIndex = 11;
 	uint32_t nextSndIndex = initIndex;
 	int64_t nextKcppUpdateTs = 0;
+	int64_t nextSendTs = 0;
 
 	//KcpSession kcppClient(
 	//	kcpp::RoleTypeE::kCli,
@@ -115,8 +116,9 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 	kcpCli->output = udp_output;
 
 
-#if TEST_APPLICATION_LEVEL_CONGESTION_CONTROL
+#if !PRACTICAL_CONDITION
 
+	static const int64_t kSendInterval = 0;
 	const uint32_t testPassIndex = 66666;
 	//kcppClient.SetConfig(111, 1024, 1024, 4096, 1, 1, 1, 1, 0, 5);
 	ikcp_wndsize(kcpCli, 1024, 1024);
@@ -130,17 +132,13 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 
 #else
 
+	static const int64_t kSendInterval = 33; // 30fps
 	const uint32_t testPassIndex = 666;
 	int waitSndCntLimit = 512;
 	while (1)
 	{
-	#ifndef _WIN32
-		usleep(16666); // 60fps
-	#else
-		Sleep(16666 / 1000);
-	#endif // !_WIN32
 
-#endif // TEST_APPLICATION_LEVEL_CONGESTION_CONTROL
+#endif // PRACTICAL_CONDITION
 
 		IUINT32 now = iclock();
 		if (static_cast<int64_t>(now) >= nextKcppUpdateTs)
@@ -151,8 +149,9 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 		}
 
 		//if (kcppClient.CheckCanSend())
-		if (ikcp_waitsnd(kcpCli) < waitSndCntLimit)
+		if (ikcp_waitsnd(kcpCli) < waitSndCntLimit && static_cast<int64_t>(now) >= nextSendTs)
 		{
+			nextSendTs = static_cast<int64_t>(now) + kSendInterval;
 			memset(sndBuf, 0, SND_BUFF_LEN);
 			((uint32_t*)sndBuf)[0] = nextSndIndex++;
 
@@ -181,7 +180,7 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 			{
 				ikcp_update(kcpCli, now);
 			}
-			else
+			else if(result < 0)
 			{
 				printf("kcpSession Recv failed, Recv() = %d \n", len);
 				error_pause();
@@ -197,14 +196,13 @@ void udp_msg_sender(int fd, struct sockaddr* dst)
 			{
 				ikcp_recv(kcpCli, rcvBuf, msgLen);
 				uint32_t srvRcvMaxIndex = *(uint32_t*)(rcvBuf);
-				printf("unreliable msg from server: have recieved the max index = %d\n", (int)srvRcvMaxIndex);
+				printf("msg from server: have recieved the max index = %d\n", (int)srvRcvMaxIndex);
 				if (srvRcvMaxIndex >= testPassIndex)
 				{
 					printf("test passes, yay! \n");
 					return;
 				}
 			}
-
 			msgLen = ikcp_peeksize(kcpCli);
 		}
 	}

@@ -587,7 +587,7 @@ public:
 	Rdc(const UserOutputFunction& userOutputFunc, const RecvFuncion& rcvFunc)
 		:
 		userOutputFunc_(userOutputFunc), rcvFunc_(rcvFunc), nextSndSn_(0), nextRcvSn_(0),
-		isThisRoundFinished_(true), on_(false), mss_(111)
+		isThisRoundFinished_(true), on_(false), mss_(555)
 	{}
 
 	int Output(Buf* oBuf, PktTypeE pktType)
@@ -943,7 +943,7 @@ public:
 	void setConnectionCallback(KcpSessionConnectionCallback cb) { connectionCallback_ = std::move(cb); }
 
 	// should set before Send()
-	void SetConfig(const int mtu = 444, const int sndWnd = 128, const int rcvWnd = 128,
+	void SetConfig(const int mtu = 555, const int sndWnd = 128, const int rcvWnd = 128,
 		const int waitSndCntLimit = 512, const int nodelay = 1, const int interval = 10, const int resend = 1,
 		const int nc = 1, const int streamMode = 0, const int rx_minrto = 10)
 	{
