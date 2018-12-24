@@ -133,7 +133,7 @@ void handle_udp_msg(int fd)
 	uint32_t nextRcvIndex = kInitIndex;
 	uint32_t curRcvIndex = kInitIndex;
 	int len = 0;
-	uint32_t rcvedIndex = 0;
+	// uint32_t rcvedIndex = 0;
 	IUINT32 startTs = 0;
 	int64_t nextKcppUpdateTs = 0;
 	int64_t nextSendTs = 0;
