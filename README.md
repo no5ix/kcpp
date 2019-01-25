@@ -126,7 +126,3 @@ Please read [TestKcppClient.cpp](https://github.com/no5ix/kcpp/blob/master/TestK
 //
 ...
 ```
-
-在注释的过程中， 除了少量空格和换行以及一处有无符号比较的调整(为保证高警告级别可编译过)外 :    
-`if ((IUINT32)count >= IKCP_WND_RCV) return -2;`   
-没有对原始代码进行任何其他改动， 最大程度地保证了代码的“原汁原味”。
