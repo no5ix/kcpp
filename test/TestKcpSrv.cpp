@@ -82,7 +82,7 @@ float GetRandomFloatFromZeroToOne()
 //}
 
 int fd = 0;
-struct sockaddr_in clientAddr;  //clent_addrÓÃÓÚ¼ÇÂ¼·¢ËÍ·½µÄµØÖ·ĞÅÏ¢
+struct sockaddr_in clientAddr;  //clent_addrç”¨äºè®°å½•å‘é€æ–¹çš„åœ°å€ä¿¡æ¯
 struct sockaddr* dstAddr = (struct sockaddr*)&clientAddr;
 int udp_output(const char *buf, int len, ikcpcb *kcp, void *user)
 {
@@ -128,7 +128,7 @@ void handle_udp_msg(int fd)
 	// we can't use char array, cause we don't know how big the recv_data is
 	kcpp::Buf kcppRcvBuf;
 
-	//struct sockaddr_in clientAddr;  //clent_addrÓÃÓÚ¼ÇÂ¼·¢ËÍ·½µÄµØÖ·ĞÅÏ¢
+	//struct sockaddr_in clientAddr;  //clent_addrç”¨äºè®°å½•å‘é€æ–¹çš„åœ°å€ä¿¡æ¯
 	uint32_t kInitIndex = 11;
 	uint32_t nextRcvIndex = kInitIndex;
 	uint32_t curRcvIndex = kInitIndex;
@@ -240,7 +240,7 @@ void handle_udp_msg(int fd)
 
 				if (rcvedIndex != nextRcvIndex)
 				{
-					// Èç¹ûÊÕµ½µÄ°ü²»Á¬Ğø
+					// å¦‚æœæ”¶åˆ°çš„åŒ…ä¸è¿ç»­
 					printf("ERROR index != nextRcvIndex : %d != %d\n",
 						(int)rcvedIndex, (int)nextRcvIndex);
 					error_pause();

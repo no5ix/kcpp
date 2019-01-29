@@ -245,7 +245,7 @@ int main(int argc, char* argv[])
 		fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 	}
 #else
-	unsigned long flags = 1; /* ÕâÀï¸ù¾İĞèÒªÉèÖÃ³É0»ò1 */
+	unsigned long flags = 1; /* è¿™é‡Œæ ¹æ®éœ€è¦è®¾ç½®æˆ0æˆ–1 */
 	ioctlsocket(fd, FIONBIO, &flags);
 #endif
 
