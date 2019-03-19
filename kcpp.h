@@ -649,12 +649,7 @@ public:
 		int8_t rcvFrg = 0;
 		int16_t dataLen = 0;
 
-		// printf("iBuf->readableBytes() = %d\n", (int)iBuf->readableBytes());
 		bool hasDataLeftThisRound = ParsePkt(iBuf, pktType, rcvSn, rcvFrgCnt, rcvFrg, dataLen);
-		// printf("rcvSn = %d\n", (int)rcvSn);
-		// printf("nextRcvSn_ = %d\n", (int)nextRcvSn_);
-		// printf("dataLen = %d\n", (int)dataLen);
-
 		if (hasDataLeftThisRound)
 		{
 			auto discardRcvedData = [&]() { iBuf->retrieve(dataLen); len = 0; };
