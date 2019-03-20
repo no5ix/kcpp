@@ -17,7 +17,7 @@
 #include <time.h>
 #endif
 
-#include "kcpp.h"
+#include "../kcpp.h"
 
 using kcpp::KcpSession;
 

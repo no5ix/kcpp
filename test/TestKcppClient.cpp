@@ -15,7 +15,8 @@
 	#include <time.h>
 #endif
 
-#include "kcpp.h"
+#include "../kcpp.h"
+
 
 #define SERVER_PORT 6666
 
