@@ -24,8 +24,6 @@
 
 - [realtime-server](https://github.com/no5ix/realtime-server) : A realtime dedicated game server ( FPS / MOBA ). 一个实时的专用游戏服务器.
 - [realtime-server-ue4-demo](https://github.com/no5ix/realtime-server-ue4-demo) :  A UE4 State Synchronization demo for realtime-server. 为realtime-server而写的一个UE4状态同步demo, [Video Preview 视频演示](https://hulinhong.com)
-- [TestKcppServer.cpp](https://github.com/no5ix/kcpp/blob/master/TestKcppServer.cpp)
-- [TestKcppClient.cpp](https://github.com/no5ix/kcpp/blob/master/TestKcppClient.cpp)
 
 
 # kcpp Usage
