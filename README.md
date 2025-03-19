@@ -1,7 +1,129 @@
+# Lightweight KCP Session Implementation - kcpp
 
-# QQ群
+`kcpp` truly enables you to use KCP just by including a single header file and writing a few lines of code, without having to worry about how to organize the code to adapt to KCP.
 
-因为 KCP 官方群已经满了, 可以加群 496687140
+- You only need to include the single header file `kcpp.h`.
+- You only need to call `KcpSession::Send`, `KcpSession::Recv`, and `KcpSession::Update` to complete UDP connection state management, session control, and RUDP protocol scheduling.
+
+# Features
+
+- Single-header-only
+- Session implementation
+- Dynamic redundancy
+- Two-channel
+  - Reliable
+  - Unreliable
+
+# kcpp Examples
+
+- [realtime-server](https://github.com/no5ix/realtime-server): A real-time dedicated game server (FPS / MOBA).
+- [realtime-server-ue4-demo](https://github.com/no5ix/realtime-server-ue4-demo): A UE4 state synchronization demo for the real-time server. [Video Preview](https://hulinhong.com)
+
+# kcpp Usage
+
+The main loop is supposed to be as follows:
+
+```c++
+Game.Init();
+
+// kcpp initialization
+kcpp::KcpSession myKcpSess(
+    KcpSession::RoleTypeE,
+    std::bind(udp_output, _1, _2),
+    std::bind(udp_input),
+    std::bind(timer)
+);
+
+while (!isGameOver) {
+    myKcpSess.Update();
+
+    while (myKcpSess.Recv(data, len)) {
+        if (len > 0) {
+            Game.HandleRecvData(data, len);
+        } else if (len < 0) {
+            Game.HandleRecvError(len);
+        }
+    }
+
+    if (myKcpSess.CheckCanSend()) {
+        myKcpSess.Send(data, len);
+    } else {
+        Game.HandleCanNotSendForNow();
+    }
+
+    Game.Logic();
+    Game.Render();
+}
+```
+
+The `Recv`, `Send`, and `Update` functions of kcpp are guaranteed to be non-blocking.
+Please read [TestKcppClient.cpp](https://github.com/no5ix/kcpp/blob/master/TestKcppClient.cpp) and [TestKcppServer.cpp](https://github.com/no5ix/kcpp/blob/master/TestKcppServer.cpp) for some basic usage examples.
+
+# KCP Source Code Annotations
+
+This project also comes with an annotated version of the KCP source code, `ikcp.h` and `ikcp.c`. It can be regarded as another detailed explanation of KCP, which is convenient for self-study and helps others get started more quickly. The original code is from: https://github.com/skywind3000/kcp. Thanks to skywind3000 for bringing such a concise and excellent project.
+
+Readers interested in open-source projects for real-time combat games like FPS / MOBA can also visit [realtime-server](https://github.com/no5ix/realtime-server). Welcome to communicate.
+
+Note: Tabs are used for indentation in the project, and tab is set to 2 spaces.
+
+Almost every paragraph has annotations, and key data structures are accompanied by diagrams. For example:
+
+```
+...
+//
+// The data packets sent by KCP have their own packet structure. The packet header is 24 bytes in total and contains some necessary information. The specific content and size are as follows:
+//
+// |<------------ 4 bytes ------------>|
+// +--------+--------+--------+--------+
+// |  conv                             | conv: Conversation, the session serial number used to identify whether the sent and received data packets are consistent.
+// +--------+--------+--------+--------+ cmd: Command, the instruction type, representing the type of this Segment.
+// |  cmd   |  frg   |       wnd       | frg: Fragment, the segmentation serial number. The segments are numbered from large to small, and 0 indicates that the data packet has been received completely.
+// +--------+--------+--------+--------+ wnd: Window, the window size.
+// |                ts                 | ts: Timestamp, the sending timestamp.
+// +--------+--------+--------+--------+
+// |                 sn                | sn: Sequence Number, the Segment serial number.
+// +--------+--------+--------+--------+
+// |                una                | una: Unacknowledged, the current unacknowledged serial number,
+// +--------+--------+--------+--------+      which means that all packets before this serial number have been received.
+// |                len                | len: Length, the length of the subsequent data.
+// +--------+--------+--------+--------+
+//
+...
+
+//---------------------------------------------------------------------
+// ...
+// rcv_queue: The queue for receiving messages. The data in rcv_queue is continuous, while the data in rcv_buf may be intermittent.
+// nrcv_que: The number of Segments in the receiving queue rcv_queue, which needs to be less than rcv_wnd.
+// rcv_queue is shown in the following diagram:
+// +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+// ... | 2 | 3 | 4 | ............................................... 
+// +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+//              ^              	        ^                      	^        
+//              |                      	|                      	|        
+//           rcv_nxt           	rcv_nxt + nrcv_que      rcv_nxt + rcv_wnd		
+//
+// snd_buf: The buffer for sending messages.
+// snd_buf is shown in the following diagram:
+// +---+---+---+---+---+---+---+---+---+---+---+---+---+
+// ... | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | ...........
+// +---+---+---+---+---+---+---+---+---+---+---+---+---+
+//              ^               ^               ^
+//              |               |               |
+//           snd_una         snd_nxt    snd_una + snd_wnd	
+//
+//
+// rcv_buf: The buffer for receiving messages.
+// rcv_buf is shown in the following diagram. The data in rcv_queue is continuous, while the data in rcv_buf may be intermittent.
+// +---+---+---+---+---+---+---+---+---+---+---+---+---+
+// ... | 2 | 4 | 6 | 7 | 8 | 9 | ...........
+// +---+---+---+---+---+---+---+---+---+---+---+---+---+	
+//
+...
+```
+
+
+
 
 
 # 轻量级的kcp会话实现-kcpp
@@ -11,55 +133,6 @@
 - 只需包含 `kcpp.h` 这一个头文件即可
 - 只需调用 `KcpSession::Send` 和 `KcpSession::Recv` 和 `KcpSession::Update` 即可完成UDP的链接状态管理、会话控制、 RUDP协议调度
 
-# Features
-
-- single-header-only
-- session implementation
-- dynamic redundancy
-- two-channel
-   - reliable
-   - unreliable
-
-# kcpp Examples
-
-- [realtime-server](https://github.com/no5ix/realtime-server) : A realtime dedicated game server ( FPS / MOBA ). 一个实时的专用游戏服务器.
-- [realtime-server-ue4-demo](https://github.com/no5ix/realtime-server-ue4-demo) :  A UE4 State Synchronization demo for realtime-server. 为realtime-server而写的一个UE4状态同步demo, [Video Preview 视频演示](https://hulinhong.com)
-
-
-# kcpp Usage
-
-the main loop was supposed as:
-
-``` c++
-Game.Init()
-
-// kcpp init
-kcpp::KcpSession myKcpSess(
-    KcpSession::RoleTypeE,
-    std::bind(udp_output, _1, _2),
-    std::bind(udp_input),
-    std::bind(timer));
-
-while (!isGameOver)
-	myKcpSess.Update();
-
-    while (myKcpSess.Recv(data, len))
-        if (len > 0)
-            Game.HandleRecvData(data, len)
-        else if (len < 0)
-            Game.HandleRecvError(len);
-
-        if (myKcpSess.CheckCanSend())
-            myKcpSess.Send(data, len)
-        else
-            Game.HandleCanNotSendForNow()
-
-    Game.Logic()
-    Game.Render()
-```
-
-The Recv/Send/Update functions of kcpp are guaranteed to be non-blocking.
-Please read [TestKcppClient.cpp](https://github.com/no5ix/kcpp/blob/master/TestKcppClient.cpp) and [TestKcppServer.cpp](https://github.com/no5ix/kcpp/blob/master/TestKcppServer.cpp) for some basic usage.
 
 
 # kcp源码注释
