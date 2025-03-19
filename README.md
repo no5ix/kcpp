@@ -4,6 +4,10 @@
 
 - You only need to include the single header file `kcpp.h`.
 - You only need to call `KcpSession::Send`, `KcpSession::Recv`, and `KcpSession::Update` to complete UDP connection state management, session control, and RUDP protocol scheduling.
+ 
+# What is KCP?
+
+KCP is a high-performance, reliable, and lightweight transport layer protocol designed to accelerate UDP-based data transmission. It provides an efficient alternative to TCP while maintaining UDP’s low-latency benefits. Originally developed by skywind3000, KCP is widely used in real-time applications such as gaming, live streaming, VPNs, and P2P networking.
 
 # Features
 
